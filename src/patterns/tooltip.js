@@ -36,7 +36,7 @@ define([
             } else {
                 $trigger.on("mouseover.tooltip", $trigger, tooltip.show);
                 // Make sure click on the trigger element becomes a NOP
-                $trigger.on("click.tooltip", $trigger, tooltip.blockDefault);
+                $trigger.on("click.tooltip", tooltip.blockDefaultAndPropagation);
             }
         },
 
@@ -51,14 +51,17 @@ define([
                 $container.find(".close-panel")
                     .on("click.tooltip", $trigger, tooltip.hide);
                 // Make sure click on the trigger element becomes a NOP
-                $trigger.on("click.tooltip", $trigger, tooltip.blockDefault);
+                $trigger.on("click.tooltip", tooltip.blockDefaultAndPropagation);
             } else {
                 if (parameters.click) {
-                    $container.on("click.tooltip", $trigger, function(ev) {
+                    $container.on("click.tooltip", function(ev) {
                         ev.stopPropagation();
+                        // explicitly do not prevent the default
+                        // action, to allow i.e. links in the tooltip
+                        // content to trigger
                     });
                     $(document).on("click.tooltip", $trigger, tooltip.hide);
-                    $trigger.on("click.tooltip", tooltip.blockDefault);
+                    $trigger.on("click.tooltip", $trigger, tooltip.hide);
                     // close if something inside the tooltip triggered an injection
                     $container.on('patterns-inject-triggered.tooltip',
                                   $trigger, tooltip.hide);
@@ -66,7 +69,7 @@ define([
                 } else {
                     $container.on("click.tooltip", $trigger, tooltip.hide);
                     $trigger.on("mouseleave.tooltip", $trigger, tooltip.hide);
-                    $trigger.on("click.tooltip", tooltip.blockDefault);
+                    $trigger.on("click.tooltip", tooltip.blockDefaultAndPropagation);
                 }
             }
         },
@@ -79,12 +82,14 @@ define([
             $trigger.off(".tooltip");
         },
 
-        blockDefault: function(event) {
+        blockDefaultAndPropagation: function(event) {
             event.preventDefault();
+            event.stopPropagation();
         },
 
         show: function(event) {
-            event.preventDefault();
+            tooltip.blockDefaultAndPropagation(event);
+
             var $trigger = event.data,
                 $container = tooltip.getContainer($trigger),
                 namespace = $container.attr("id"),
@@ -123,6 +128,8 @@ define([
         },
 
         hide: function(event) {
+            tooltip.blockDefaultAndPropagation(event);
+
             var $trigger = event.data,
                 $container = tooltip.getContainer($trigger),
                 namespace = $container.attr("id");
