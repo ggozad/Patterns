@@ -8,7 +8,7 @@ module.exports = {
   },
   build : {
     options : {
-      out : 'bundles/patterns.js'
+      out : 'bundles/patterns.<%= meta.fingerprint %>.js'
     }
   },
   standalone : {
@@ -16,7 +16,7 @@ module.exports = {
       name : '../lib/almond',
       include : 'main',
       wrap : true,
-      out : 'bundles/patterns-standalone.js',
+      out : 'bundles/patterns-standalone.<%= meta.fingerprint %>.js',
       almond: true
     }
   }
