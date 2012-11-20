@@ -11,12 +11,12 @@ module.exports = function(grunt) {
     uglify : {
       build : {
         files : {
-          'bundles/patterns.<%= meta.fingerprint %>.min.js' : ['bundles/patterns.js']
+          'bundles/patterns.<%= meta.fingerprint %>.min.js' : ['bundles/patterns.<%= meta.fingerprint %>.js']
         }
       },
       standalone : {
         files : {
-          'bundles/patterns-standalone.<%= meta.fingerprint %>.min.js' : ['bundles/patterns-standalone.js']
+          'bundles/patterns-standalone.<%= meta.fingerprint %>.min.js' : ['bundles/patterns-standalone.<%= meta.fingerprint %>.js']
         }
       }
     },
@@ -24,6 +24,32 @@ module.exports = function(grunt) {
       build : [
         'bundles/patterns*.js'
       ]
+    },
+    symlink : {
+      bundles: {
+        files : {
+          'bundles/patterns-standalone.js'     : 'patterns-standalone.<%= meta.fingerprint %>.js',
+          'bundles/patterns-standalone.min.js' : 'patterns-standalone.<%= meta.fingerprint %>.min.js',
+          'bundles/patterns.js'                : 'patterns.<%= meta.fingerprint %>.js',
+          'bundles/patterns.min.js'            : 'patterns.<%= meta.fingerprint %>.min.js'
+        }
+      }
+    }
+  });
+
+  grunt.registerMultiTask('symlink', 'Create symlinks.', function() {
+    var fs = require('fs'),
+        dest = this.file.dest,
+        src = this.file.src[0];
+    try{
+      fs.symlinkSync(src, dest);
+      var rel = dest.substr(0, dest.lastIndexOf('/') + 1);
+      grunt.log.ok('created symlink at ' + dest +
+                   ' that points to ' + src +
+                   ' (relative to ' + rel +')'
+      );
+    } catch(e){
+      if (e.code === 'EEXIST') grunt.log.error(dest + ' already exists, skipping');
     }
   });
 
@@ -66,7 +92,7 @@ module.exports = function(grunt) {
   grunt.loadNpmTasks('grunt-contrib-clean');
   grunt.loadNpmTasks('grunt-contrib-uglify');
 
-  grunt.registerTask('default', ['git-rev', 'clean', 'requirejs', 'uglify']);
+  grunt.registerTask('default', ['git-rev', 'clean', 'requirejs', 'uglify', 'symlink']);
 
 };
 
