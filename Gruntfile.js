@@ -29,7 +29,7 @@ module.exports = function(grunt) {
 
   grunt.registerTask('git-rev',function(){
     var done = this.async();
-    git.short(function(string){
+    git.tag(function(string){
       grunt.config('meta.fingerprint', string);
       done();
     })
