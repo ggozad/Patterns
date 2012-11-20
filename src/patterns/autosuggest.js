@@ -4,17 +4,17 @@
 // - prefill and ashtmlid in data-auto-suggest-config
 define([
     'jquery',
-    '../core/logging',
+    '../core/logger',
     '../core/parser',
     '../registry',
     '../utils',
     'jquery_autosuggest',
     'jquery_form'
-], function($, logging, Parser, registry, utils) {
-    var log = logging.getLogger('autosuggest');
+], function($, logger, Parser, registry, utils) {
+    var log = logger.getLogger('pat.autosuggest');
 
     var parser = new Parser("autosuggest");
-    parser.add_argument('words');
+    parser.add_argument('words', "");
     parser.add_argument('pre-fill');
     parser.add_argument('as-html-id');
     parser.add_argument('selected-value-prop', "name");
@@ -25,21 +25,15 @@ define([
         name: 'autosuggest',
         trigger: "input.pat-autosuggest",
         init: function($el, opts) {
-            if ($el.length > 1) {
-                return $el.map(function() {
-                    return _.init($(this), opts);
-                });
-            }
+            if ($el.length > 1)
+                return $el.each(function() { _.init($(this), opts); });
 
-            // fetch config from first parent found
             var cfg = _.parser.parse($el, opts);
-            if ($el.attr('readonly')) {
+            if ($el.attr('readonly'))
                 cfg.startText = "";
-            }
 
-            if (cfg.preFill && (cfg.preFill.slice(0,1) === ',')) {
+            if (cfg.preFill && (cfg.preFill.slice(0,1) === ','))
                 cfg.preFill = cfg.preFill.slice(1);
-            }
 
             $el.on('keydown.pat-autosuggest', _.onKeyDown);
 
@@ -48,11 +42,11 @@ define([
             });
 
             cfg.selectionAdded = function(elem) {
-                $el.next().trigger($.Event("onchange")); 
+                $el.next().trigger("change");
             };
             cfg.selectionRemoved = function(elem) {
                 elem.remove();
-                $el.next().trigger($.Event("onchange"));
+                $el.next().trigger("change");
             };
 
             // XXX: See https://github.com/Patternslib/Patterns/issues/149

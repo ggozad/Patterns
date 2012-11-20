@@ -2,21 +2,23 @@ define([
     'jquery',
     '../lib/ajax',
     "../core/parser",
-    '../core/logging',
+    '../core/logger',
     '../registry',
+    "../utils",
+    'URIjs/URI',
+    'jquery_textchange',
     'tinymce'
-], function($, ajax, Parser, logging, registry) {
-    var log = logging.getLogger('editTinyMCE'),
+], function($, ajax, Parser, logger, registry, utils, URI) {
+    var log = logger.getLogger('pat.editTinyMCE'),
         parser = new Parser("edit-tinymce");
 
-    parser.add_argument('theme-baseurl');
+    parser.add_argument('tinymce-baseurl');
 
     var _ = {
         name: "editTinyMCE",
         trigger: 'form textarea.pat-edit-tinymce',
         init: function($el, opts) {
             var $form = $el.parents('form'),
-                $resetbtn = $form.find('[type=reset]'),
                 id = $el.attr('id');
 
             // make sure the textarea has an id
@@ -48,16 +50,48 @@ define([
             cfg.elements = id;
             cfg.mode = 'exact';
             cfg.readonly = Boolean($el.attr('readonly'));
-            
-            // get arguments
-            args = parser.parse($el, opts);
 
-            if (args.themeBaseurl && cfg.theme &&
-                !tinyMCE.ThemeManager.urls[cfg.theme]) {
-                log.info('loading tinymce theme ' + cfg.theme);
-                tinyMCE.ThemeManager.load(cfg.theme, args.themeBaseurl + '/' +
-                    cfg.theme + '/editor_template' + tinyMCE.suffix + '.js');
+            // get arguments
+            var args = parser.parse($el, opts);
+
+            if (!args.tinymceBaseurl) {
+                log.error('tinymce-baseurl has to point to TinyMCE resources');
+                return false;
             }
+
+            var u = new URI();
+            u._parts.query = null;
+
+            // handle rebasing of own urls if we were injected
+            var parents = $el.parents().filter(function() {
+                return $(this).data('pat-injected');
+            });
+            if (parents.length)
+                u = URI(parents.first().data('pat-injected').origin).absoluteTo(u);
+            if (cfg.content_css)
+                cfg.content_css = URI(cfg.content_css).absoluteTo(u).toString();
+            tinyMCE.baseURL = URI(args.tinymceBaseurl).absoluteTo(u).toString();
+            tinyMCE.baseURI = new tinyMCE.util.URI(tinyMCE.baseURL);
+
+            var $tinymce, $tinyifr,
+                propagate = function(ev) {
+                    $tinyifr.trigger(ev);
+                };
+            cfg.oninit = function() {
+                // find tiny's iframe and edit field
+                $tinyifr = $('#' + id + '_ifr');
+                $tinymce = $tinyifr.contents().find('#tinymce');
+
+                // propagate first textchange event outside the iframe
+                $tinymce.one('textchange.pat-tinymce', propagate);
+            };
+
+            // reactivate textchange propagation on reset and successfull submit
+            $form.on('reset.pat-tinymce pat-ajax-success.pat-tinymce', function() {
+                $tinymce
+                    .off('.pat-tinymce')
+                    .one('textchange.pat-tinymce', propagate);
+            });
 
             // initialize editor
             var tinymce = tinyMCE.init(cfg);
@@ -71,19 +105,10 @@ define([
                 })(id)
             };
 
-            $form.on('submit', function(ev) {
+            $form.on('submit.pat-tinymce', function(ev) {
                 ev.preventDefault();
                 ajax($form, ajaxopts);
             });
-
-            // XXX: we hijack the reset button, but currently only reset
-            // the tiny textarea.
-            $resetbtn.on('click.pat-edit-tinymce', (function(id) {
-                return function(ev) {
-                    ev.preventDefault();
-                    tinyMCE.editors[id].load();
-                };
-            })(id));
 
             return $el;
         },

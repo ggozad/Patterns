@@ -8,23 +8,23 @@
  */
 define([
     "jquery",
-    "./core/logging",
+    "./core/logger",
     "./transforms",
     "./utils",
     // below here modules that are only loaded
     "./compat"
-], function($, logging, transforms, utils) {
-    var log = logging.getLogger('registry'),
+], function($, logger, transforms, utils) {
+    var log = logger.getLogger('registry'),
         jquery_plugin = utils.jquery_plugin;
 
     var registry = {
         patterns: {},
         scan: function(content) {
-            var $content = $(content), pattern, $match, plog, $initialised;
+            var $content = $(content), pattern, $match, plog;
             transforms.transformContent($content);
             for (var name in registry.patterns) {
                 pattern = registry.patterns[name];
-                plog = logging.getLogger(name);
+                plog = logger.getLogger(name);
 
                 // construct set of matching elements
                 $match = $content.filter(pattern.trigger);
@@ -38,9 +38,9 @@ define([
                     plog.debug('Initialising:', $match);
                     try {
                         pattern.init($match);
-                        plog.debug('Initialised:', $initialised);
+                        plog.debug('done.');
                     } catch (e) {
-                        plog.error("Error initialising pattern", e);
+                        plog.error("Caught error:", e);
                     }
                 }
             }
@@ -60,8 +60,12 @@ define([
 
             // register pattern as jquery plugin
             if (pattern.jquery_plugin) {
+                var pluginName = ("pattern-" + pattern.name)
+                        .replace(/-([a-zA-Z])/g, function(match, p1) {
+                            return p1.toUpperCase();
+                        });
                 // XXX: here the pattern used to be jquery_plugin wrapped
-                $.fn[pattern.jquery_plugin] = jquery_plugin(pattern);
+                $.fn[pluginName] = jquery_plugin(pattern);
             }
 
             log.debug('Registered pattern:', pattern.name, pattern);

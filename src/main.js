@@ -1,6 +1,6 @@
 requirejs.config({
     paths: {
-        URI: "./3rdparty/URI",
+        URIjs: "./3rdparty/URIjs/src",
         jquery: "./3rdparty/jquery-1.8.2",
         jquery_anythingslider: "./3rdparty/jquery.anythingslider",
         jquery_autosuggest: "./3rdparty/jquery.autoSuggest",
@@ -9,9 +9,10 @@ requirejs.config({
         jquery_form: "./lib/jquery.form/jquery.form",
         jquery_fullcalendar: "./3rdparty/fullcalendar/fullcalendar",
         jquery_placeholder: "./3rdparty/jquery.placeholder",
+        jquery_textchange: "./3rdparty/jquery.textchange/jquery.textchange",
         jquery_validate: "./3rdparty/jquery-validation/jquery.validate",
         jquery_validate_additional_methods: "./3rdparty/jquery-validation/additional-methods",
-        log4javascript: "./3rdparty/log4javascript/log4javascript_uncompressed",
+        logging: "./3rdparty/logging/src/logging",
         modernizr: "./3rdparty/modernizr-2.0.6",
         prefixfree: "./3rdparty/prefixfree",
         tinymce: "./3rdparty/tiny_mce/tiny_mce_src"
@@ -24,9 +25,6 @@ requirejs.config({
             deps: ["jquery"]
         },
         jquery_chosen: {
-            deps: ["jquery"]
-        },
-        jquery_ext: {
             deps: ["jquery"]
         },
         jquery_form: {
@@ -59,7 +57,7 @@ define([
     './patterns/autosubmit2',
     './patterns/autosuggest',
     './patterns/breadcrumbs',
-	'./patterns/bumper',
+    './patterns/bumper',
     './patterns/carousel',
     './patterns/checkedflag',
     './patterns/checklist',
@@ -69,6 +67,7 @@ define([
     './patterns/edit-tinymce',
     './patterns/expandable',
     './patterns/focus',
+    './patterns/form-state',
     './patterns/fullcalendar',
     './patterns/inject',
     './patterns/menu',

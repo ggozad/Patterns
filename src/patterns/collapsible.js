@@ -6,12 +6,12 @@
 define([
     "jquery",
     "./inject",
-    "../core/logging",
+    "../core/logger",
     "../core/parser",
     "../core/store",
     "../registry"
-], function($, inject, logging, Parser, store, registry) {
-    var log = logging.getLogger("collapsible"),
+], function($, inject, logger, Parser, store, registry) {
+    var log = logger.getLogger("pat.collapsible"),
         parser = new Parser("collapsible");
 
     parser.add_argument("load-content");
@@ -23,7 +23,7 @@ define([
     var _ = {
         name: "collapsible",
         trigger: ".pat-collapsible",
-
+        jquery_plugin: true,
         init: function($el, opts) {
             return $el.each(function() {
                 var $el = $(this),
@@ -31,7 +31,7 @@ define([
                 // create collapsible structure
                     $trigger = $el.children(':first'),
                     $content = $el.children(':gt(0)'),
-                    $panel, state;
+                    $panel, state, storage;
                 if ($content.length > 0)
                     $panel = $content.wrapAll('<div class="panel-content" />')
                         .parent();
