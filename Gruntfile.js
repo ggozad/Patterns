@@ -92,7 +92,7 @@ module.exports = function(grunt) {
   grunt.loadNpmTasks('grunt-contrib-clean');
   grunt.loadNpmTasks('grunt-contrib-uglify');
 
-  grunt.registerTask('default', ['git-rev', 'clean', 'requirejs', 'uglify', 'symlink']);
+  grunt.registerTask('default', ['git-rev', 'requirejs', 'uglify', 'symlink']);
 
 };
 
