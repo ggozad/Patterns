@@ -54,7 +54,8 @@ define([
             if ($el.is('a') && $nexthref.length > 0) {
                 log.debug('Skipping as next href already exists', $nexthref);
                 // XXX: reconsider how the injection enters exhausted state
-                return $el.attr({href: cfgs[0].nextHref});
+                return $el.attr({href: (window.location.href.split('#')[0] || '') +
+                                 cfgs[0].nextHref});
             }
 
             // setup event handlers
@@ -177,7 +178,7 @@ define([
 
             cfg.action = targetMod + targetPosition;
 
-            // Once we start detacting illegal combinations, we'll
+            // Once we start detecting illegal combinations, we'll
             // return false in case of error
             return true;
         },
@@ -242,12 +243,16 @@ define([
                 });
 
                 if (cfgs[0].nextHref) {
-                    $el.attr({href: cfgs[0].nextHref});
+                    $el.attr({href: (window.location.href.split('#')[0] || '') +
+                              cfgs[0].nextHref});
                     _.destroy($el);
 
+                    // XXX: this used to be the case, but I don't see
+                    // why that would be a good idea.
+                    //
                     // jump to new href target
-                    if (!$el.hasClass("autoLoading-visible"))
-                        window.location.href = $el.attr('href');
+                    //if (!$el.hasClass("autoLoading-visible"))
+                    //    window.location.href = $el.attr('href');
                 }
                 $el.off('pat-ajax-success.pat-inject');
             };
@@ -300,10 +305,18 @@ define([
                 return $source;
             });
         },
+
+        _link_attributes: {
+            A: "href",
+            FORM: "action",
+            IMG: "img"
+        },
+
         _parseRawHtml: function(html, url) {
             url = url || "";
             var $html;
             $html = $('<div/>').html(
+                // remove script tags and head and replace body by a div
                 html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
                     .replace(/<head\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/head>/gi, "")
                     .replace(/<body(.*)>/gi, '<div id="__original_body">')
@@ -312,23 +325,19 @@ define([
             // this.(href|action|src) yields absolute uri -> retrieve relative
             // uris with getAttribute
             $html.find(":uri(is:relative)").each(function() {
-                switch (this.tagName) {
-                case "A":
-                    this.href=new URI(this.getAttribute("href"))
-                        .absoluteTo(url).toString();
-                    break;
-                case "FORM":
-                    this.action=new URI(this.getAttribute("action"))
-                        .absoluteTo(url).toString();
-                    break;
-                case "IMG":
-                    this.src=new URI(this.getAttribute("src"))
-                        .absoluteTo(url).toString();
-                    break;
-                }
+                var attr = _._link_attributes[this.tagName],
+                    rel_url;
+                if (!attr)
+                    return;
+                rel_url=this.getAttribute(attr);
+                if (!rel_url || rel_url[0]==="#")
+                    return;
+                rel_url=new URI(rel_url).absoluteTo(url).toString();
+                this[attr]=rel_url;
             });
             return $html;
         },
+
         // XXX: hack
         _initAutoloadVisible: function($el) {
             // ignore executed autoloads
