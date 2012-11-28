@@ -11,12 +11,12 @@ module.exports = function(grunt) {
     uglify : {
       build : {
         files : {
-          'bundles/patterns.<%= meta.fingerprint %>.min.js' : ['bundles/patterns.<%= meta.fingerprint %>.js']
+          'bundles/patterns.<%= meta.fingerprint %>.min.js' : ['bundles/patterns.<%= meta.fingerprint %>.debug.js']
         }
       },
       standalone : {
         files : {
-          'bundles/patterns-standalone.<%= meta.fingerprint %>.min.js' : ['bundles/patterns-standalone.<%= meta.fingerprint %>.js']
+          'bundles/patterns-standalone.<%= meta.fingerprint %>.min.js' : ['bundles/patterns-standalone.<%= meta.fingerprint %>.debug.js']
         }
       }
     },
@@ -28,11 +28,36 @@ module.exports = function(grunt) {
     symlink : {
       bundles: {
         files : {
-          'bundles/patterns-standalone.js'     : 'patterns-standalone.<%= meta.fingerprint %>.js',
-          'bundles/patterns-standalone.min.js' : 'patterns-standalone.<%= meta.fingerprint %>.min.js',
-          'bundles/patterns.js'                : 'patterns.<%= meta.fingerprint %>.js',
-          'bundles/patterns.min.js'            : 'patterns.<%= meta.fingerprint %>.min.js'
+          'bundles/patterns-standalone.js'       : 'patterns-standalone.<%= meta.fingerprint %>.js',
+          'bundles/patterns-standalone.min.js'   : 'patterns-standalone.<%= meta.fingerprint %>.min.js',
+          'bundles/patterns-standalone.debug.js' : 'patterns-standalone.<%= meta.fingerprint %>.debug.js',
+          'bundles/patterns.js'                  : 'patterns.<%= meta.fingerprint %>.js',
+          'bundles/patterns.min.js'              : 'patterns.<%= meta.fingerprint %>.min.js',
+          'bundles/patterns.debug.js'            : 'patterns.<%= meta.fingerprint %>.debug.js'
         }
+      }
+    },
+    sass : {
+      options : {
+        compass : true
+      },
+      dist : {
+        files : {
+          'style/main.css' : 'style/scss/main.scss'
+        },
+        options : {
+          style : 'compressed'
+        }
+      }
+    },
+    strip : {
+      'patterns' : {
+        src  : 'bundles/patterns.<%= meta.fingerprint %>.debug.js',
+        dest : 'bundles/patterns.<%= meta.fingerprint %>.js'
+      },
+      'patterns-standalone' : {
+        src  : 'bundles/patterns-standalone.<%= meta.fingerprint %>.debug.js',
+        dest : 'bundles/patterns-standalone.<%= meta.fingerprint %>.js'
       }
     }
   });
@@ -42,6 +67,7 @@ module.exports = function(grunt) {
         dest = this.file.dest,
         src = this.file.src[0];
     try{
+      if (fs.existsSync(dest)) fs.unlinkSync(dest);
       fs.symlinkSync(src, dest);
       var rel = dest.substr(0, dest.lastIndexOf('/') + 1);
       grunt.log.ok('created symlink at ' + dest +
@@ -91,8 +117,10 @@ module.exports = function(grunt) {
   grunt.loadNpmTasks('grunt-contrib-requirejs');
   grunt.loadNpmTasks('grunt-contrib-clean');
   grunt.loadNpmTasks('grunt-contrib-uglify');
+  grunt.loadNpmTasks('grunt-contrib-sass');
+  grunt.loadNpmTasks('grunt-strip');
 
-  grunt.registerTask('default', ['git-rev', 'requirejs', 'uglify', 'symlink']);
+  grunt.registerTask('default', ['git-rev', 'requirejs', 'strip', 'uglify', 'symlink', 'sass']);
 
 };
 
