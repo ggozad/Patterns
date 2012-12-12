@@ -1,0 +1,8 @@
+
+@mixin test($a) {
+  background-color: darken($a,10%);
+}
+
+#data {
+  @include test(red);
+}
