@@ -155,11 +155,6 @@ module.exports = function(grunt) {
         });
     });
 
-    // grunt.registerTask('check','Run unit tests through PhantomJS',function(){
-    //     var done = this.async();
-    //     runCommand('phantomjs',['lib/phantom-jasmine/lib/run_jasmine_test.coffee','tests/index.html'], done);
-    // })
-
     grunt.registerTask('localize-demo-images','Localize Demo Images',function(){
         var done = this.async();
         runCommand('tools/localize-demo-images.sh',[], done);
