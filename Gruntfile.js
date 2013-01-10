@@ -200,11 +200,10 @@ module.exports = function(grunt) {
     grunt.loadNpmTasks('grunt-contrib-sass');
     grunt.loadNpmTasks('grunt-strip');
 
-    // grunt.registerTask("test", ["jasmine", "jshint"]);
+    grunt.registerTask("test", ["jasmine", "jshint"]);
     // grunt.registerTask("build", ["clean", "requirejs", "uglify"]);
     grunt.registerTask('default', [
-        "jasmine",
-        "jshint",
+        "test",
         //"clean",
         'git-rev',
         'requirejs',
