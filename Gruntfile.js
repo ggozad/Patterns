@@ -111,6 +111,8 @@ module.exports = function(grunt) {
                 nonew: true,
                 //strict: true,
 
+                // XXX: I think all/some of these (except "define")
+                // should be declared per file.
                 predef: [
                     "requirejs",
                     "require",
