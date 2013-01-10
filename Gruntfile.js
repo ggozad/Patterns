@@ -115,19 +115,6 @@ module.exports = function(grunt) {
                 }
             }
         },
-        sass : {
-            options : {
-                compass : true
-            },
-            dist : {
-                files : {
-                    'style/main.css' : 'style/scss/main.scss'
-                },
-                options : {
-                    style : 'compressed'
-                }
-            }
-        },
         strip : {
             'patterns' : {
                 src  : 'bundles/patterns.<%= meta.fingerprint %>.debug.js',
@@ -138,6 +125,19 @@ module.exports = function(grunt) {
                 dest : 'bundles/patterns-standalone.<%= meta.fingerprint %>.js'
             }
         }
+        // sass : {
+        //     options : {
+        //         compass : true
+        //     },
+        //     dist : {
+        //         files : {
+        //             'style/main.css' : 'style/scss/main.scss'
+        //         },
+        //         options : {
+        //             style : 'compressed'
+        //         }
+        //     }
+        // },
     });
 
     grunt.registerMultiTask('symlink', 'Create symlinks.', function() {
@@ -197,7 +197,7 @@ module.exports = function(grunt) {
     grunt.loadNpmTasks("grunt-contrib-jasmine");
     grunt.loadNpmTasks("grunt-contrib-jshint");
     grunt.loadNpmTasks('grunt-contrib-uglify');
-    grunt.loadNpmTasks('grunt-contrib-sass');
+    //grunt.loadNpmTasks('grunt-contrib-sass');
     grunt.loadNpmTasks('grunt-strip');
 
     grunt.registerTask("test", ["jasmine", "jshint"]);
@@ -206,8 +206,7 @@ module.exports = function(grunt) {
         'requirejs',
         'strip',
         'uglify',
-        'symlink',
-        'sass'
+        'symlink'
     ]);
     grunt.registerTask('default', ["test", "build"]);
 };
