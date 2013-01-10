@@ -162,7 +162,7 @@ module.exports = function(grunt) {
         git.tag(function(string){
             grunt.config('meta.fingerprint', string);
             done();
-        })
+        });
     });
 
     // grunt.registerTask('check','Run unit tests through PhantomJS',function(){
@@ -173,12 +173,12 @@ module.exports = function(grunt) {
     grunt.registerTask('localize-demo-images','Localize Demo Images',function(){
         var done = this.async();
         runCommand('tools/localize-demo-images.sh',[], done);
-    })
+    });
 
     grunt.registerTask('doc','Build docs',function(){
         var done = this.async();
         runCommand('sphinx-build',['-b', 'html','docs','build/docs'], done);
-    })
+    });
 
     function runCommand(command, args, done) {
         grunt.log.write('Running ' + command + '...');
