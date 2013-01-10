@@ -150,6 +150,7 @@ module.exports = function(grunt) {
     });
 
     grunt.registerMultiTask('symlink', 'Create symlinks.', function() {
+        grunt.task.requires('git-rev');
         var fs = require('fs');
         this.files.forEach(function(f) {
             var dest = f.dest,
