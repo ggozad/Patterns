@@ -5,22 +5,25 @@ describe("transforms", function() {
         mapal = cls;
     });
 
-    // Reset the lab before each test
     beforeEach(function() {
-        $("#lab *").remove();
+        $("<div/>", {id: "lab"}).appendTo(document.body);
+    });
+
+    afterEach(function() {
+        $("#lab").remove();
     });
 
     describe("_convertToIframes", function() {
         it("Keep non-html objects", function() {
             var $lab = $("#lab");
-            $lab.append('<object type="text/plain">Plain content</object>');
+            $lab.append("<object type=\"text/plain\">Plain content</object>");
             mapal._convertToIframes($lab);
             expect($lab.find("object").length).toBe(1);
         });
 
         it("Transform text/html objects", function() {
             var $lab = $("#lab");
-            $lab.append('<object type="text/html" data="about:blank">Plain content</object>');
+            $lab.append("<object type=\"text/html\" data=\"about:blank\">Plain content</object>");
             mapal._convertToIframes($lab);
             expect($lab.find("object").length).toBe(0);
             var $iframe = $lab.find("iframe");
@@ -33,8 +36,8 @@ describe("transforms", function() {
         it("Convert legend to p.legend", function() {
             var $lab = $("#lab");
             $lab.append("<fieldset><legend>Fieldset title</legend></fieldset>");
-            mapal.transformContent($lab[0]);
-            expect($lab.html()).toBe('<fieldset><p class="legend">Fieldset title</p></fieldset>');
+            mapal.transformContent($lab);
+            expect($lab.html()).toBe("<fieldset><p class=\"legend\">Fieldset title</p></fieldset>");
         });
 
         it("Keep text/html objects on non-IE", function() {

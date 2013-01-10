@@ -14,7 +14,7 @@ define([
     // below here modules that are only loaded
     "./compat"
 ], function($, logger, transforms, utils) {
-    var log = logger.getLogger('registry'),
+    var log = logger.getLogger("registry"),
         jquery_plugin = utils.jquery_plugin;
 
     var registry = {
@@ -22,23 +22,23 @@ define([
         scan: function(content) {
             var $content = $(content),
                 all = [], allsel,
-                pattern, $match, plog, name;
+                pattern, $match, plog;
 
             transforms.transformContent($content);
 
-            // selector for all patterns and patterns stored by their trigger
-            for (name in registry.patterns) {
+            // selector for all patterns
+            for (var name in registry.patterns) {
                 pattern = registry.patterns[name];
                 if (pattern.trigger) {
                     all.push(pattern.trigger);
                 }
             }
-            allsel = all.join(',');
+            allsel = all.join(",");
 
             // find all elements that belong to any pattern
             $match = $content.filter(allsel);
             $match = $match.add($content.find(allsel));
-            $match = $match.filter(':not(.cant-touch-this)');
+            $match = $match.filter(":not(.cant-touch-this)");
 
             // walk list backwards and initialize patterns inside-out.
             //
@@ -51,15 +51,15 @@ define([
             $match.toArray().reduceRight(function(acc, el) {
                 var $el = $(el);
 
-                for (name in registry.patterns) {
+                for (var name in registry.patterns) {
                     pattern = registry.patterns[name];
                     plog = logger.getLogger("pat." + name);
 
                     if ($el.is(pattern.trigger)) {
-                        plog.debug('Initialising:', $el);
+                        plog.debug("Initialising:", $el);
                         try {
                             pattern.init($el);
-                            plog.debug('done.');
+                            plog.debug("done.");
                         } catch (e) {
                             plog.error("Caught error:", e);
                         }
@@ -84,22 +84,23 @@ define([
 
             // register pattern as jquery plugin
             if (pattern.jquery_plugin) {
-                var pluginName = ("pattern-" + pattern.name)
+                var pluginName = ("pat-" + pattern.name)
                         .replace(/-([a-zA-Z])/g, function(match, p1) {
                             return p1.toUpperCase();
                         });
-                // XXX: here the pattern used to be jquery_plugin wrapped
                 $.fn[pluginName] = jquery_plugin(pattern);
+                // BBB 2012-12-10
+                $.fn[pluginName.replace(/^pat/, "pattern")] = jquery_plugin(pattern);
             }
 
-            log.debug('Registered pattern:', pattern.name, pattern);
+            log.debug("Registered pattern:", pattern.name, pattern);
             return true;
         }
     };
 
-    $(document).on('patterns-injected.patterns', function(ev) {
+    $(document).on("patterns-injected.patterns", function(ev) {
         registry.scan(ev.target);
-        $(ev.target).trigger('patterns-injected-scanned');
+        $(ev.target).trigger("patterns-injected-scanned");
     });
 
 

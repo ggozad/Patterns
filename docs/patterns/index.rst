@@ -1,16 +1,6 @@
 Pluggable patterns
 ==================
 
-The library now includes the ability to be extended to handle the syntax:
-
-.. code-block:: html
-
-   <a href="/url/to/load#source1#source2" rel=".pattern">
-
-which will trigger ``pattern`` in the code. The actions over the source IDs
-is dependent on each individual pattern. Also, each pattern can receive
-parameters after the pattern name by delimiting them with any non-alphanumeric
-character. 
 
 Markup patterns
 ---------------
@@ -36,12 +26,16 @@ changing classes in a click, to doing complex AJAX injection of content.
 .. toctree::
    :maxdepth: 1
 
+   autoscale
    autosubmit
+   bumper
    carousel
    checklist
    collapsible
    depends
    inject
+   image-crop
+   markdown
    menu
    modal
    selfhealing

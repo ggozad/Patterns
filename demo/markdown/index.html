@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html>
+	<head>
+		<meta http-equiv="Content-Type" content="text/html; charset=UTF-8">
+		<title>Demo page</title>
+		<link rel="stylesheet" href="../base.css" type="text/css">
+		<script data-main="../../src/main" src="../../lib/require.js" type="text/javascript" charset="utf-8"></script>
+	</head>
+	<body>
+		<h1>Markdown formatted content</h1>
+		<h2>Inject Markdown formatted content as HTML</h2>
+		<ol>
+			<li><a href="content" class="pat-inject" data-pat-inject="target: #target; data-type: markdown">Load and inject markdown content with data-type declaration.</a></li>
+			<li><a href="content.md" class="pat-inject" data-pat-inject="target: #target">Load and inject markdown content, automatically detected as markdown based on the file name extension.</a></li>
+		</ol>
+		<div id="target">
+			Here some Markdown rendered content will appear if you click on one of the links above.
+		</div>
+		<hr />
+
+		<h2>Autoloading content from a separate Markdown file</h2>
+		
+		<a href="content.md" id="target-2" class="pat-inject autoLoading-visible" data-pat-inject="target: #target-2::element">This content will be replaced by the source content of the link, rendered as HTML.</a>
+		
+		<hr/>
+
+		<h2>Render inline Markdown content as HTML</h2>
+		<!-- this area's content will be converted to html and injected
+                into a div after the <pre>.
+		-->
+		<pre class="pat-markdown"># Some Other Header 1
+
+## Some Other Header 2
+
+Some _other_ __markdown__ ___content___.
+
+And a list numbered list:
+
+1. one
+2. two
+3. three
+7. four
+		</pre>
+	</body>
+</html>

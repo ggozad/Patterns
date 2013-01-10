@@ -9441,5971 +9441,252 @@ if ( typeof define === "function" && define.amd && define.amd.jQuery ) {
 })( window );
 
 /**
- * Copyright 2012 Tim Down.
+ * Patterns logging - minimal logging framework
  *
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- *
- *      http://www.apache.org/licenses/LICENSE-2.0
- *
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
+ * Copyright 2012 Simplon B.V.
  */
 
-/**
- * log4javascript
- *
- * log4javascript is a logging framework for JavaScript based on log4j
- * for Java. This file contains all core log4javascript code and is the only
- * file required to use log4javascript, unless you require support for
- * document.domain, in which case you will also need console.html, which must be
- * stored in the same directory as the main log4javascript.js file.
- *
- * Author: Tim Down <tim@log4javascript.org>
- * Version: 1.4.3
- * Edition: log4javascript
- * Build date: 18 September 2012
- * Website: http://log4javascript.org
- */
-
-/* -------------------------------------------------------------------------- */
-// Array-related stuff
-
-// Next three methods are solely for IE5, which is missing them
-if (!Array.prototype.push) {
-	Array.prototype.push = function() {
-		for (var i = 0, len = arguments.length; i < len; i++){
-			this[this.length] = arguments[i];
-		}
-		return this.length;
-	};
-}
-
-if (!Array.prototype.shift) {
-	Array.prototype.shift = function() {
-		if (this.length > 0) {
-			var firstItem = this[0];
-			for (var i = 0, len = this.length - 1; i < len; i++) {
-				this[i] = this[i + 1];
-			}
-			this.length = this.length - 1;
-			return firstItem;
-		}
-	};
-}
-
-if (!Array.prototype.splice) {
-	Array.prototype.splice = function(startIndex, deleteCount) {
-		var itemsAfterDeleted = this.slice(startIndex + deleteCount);
-		var itemsDeleted = this.slice(startIndex, startIndex + deleteCount);
-		this.length = startIndex;
-		// Copy the arguments into a proper Array object
-		var argumentsArray = [];
-		for (var i = 0, len = arguments.length; i < len; i++) {
-			argumentsArray[i] = arguments[i];
-		}
-		var itemsToAppend = (argumentsArray.length > 2) ?
-			itemsAfterDeleted = argumentsArray.slice(2).concat(itemsAfterDeleted) : itemsAfterDeleted;
-		for (i = 0, len = itemsToAppend.length; i < len; i++) {
-			this.push(itemsToAppend[i]);
-		}
-		return itemsDeleted;
-	};
-}
-
-/* -------------------------------------------------------------------------- */
-
-var log4javascript = (function() {
-
-	function isUndefined(obj) {
-		return typeof obj == "undefined";
-	}
-
-	/* ---------------------------------------------------------------------- */
-	// Custom event support
-
-	function EventSupport() {}
-
-	EventSupport.prototype = {
-		eventTypes: [],
-		eventListeners: {},
-		setEventTypes: function(eventTypesParam) {
-			if (eventTypesParam instanceof Array) {
-				this.eventTypes = eventTypesParam;
-				this.eventListeners = {};
-				for (var i = 0, len = this.eventTypes.length; i < len; i++) {
-					this.eventListeners[this.eventTypes[i]] = [];
-				}
-			} else {
-				handleError("log4javascript.EventSupport [" + this + "]: setEventTypes: eventTypes parameter must be an Array");
-			}
-		},
-
-		addEventListener: function(eventType, listener) {
-			if (typeof listener == "function") {
-				if (!array_contains(this.eventTypes, eventType)) {
-					handleError("log4javascript.EventSupport [" + this + "]: addEventListener: no event called '" + eventType + "'");
-				}
-				this.eventListeners[eventType].push(listener);
-			} else {
-				handleError("log4javascript.EventSupport [" + this + "]: addEventListener: listener must be a function");
-			}
-		},
-
-		removeEventListener: function(eventType, listener) {
-			if (typeof listener == "function") {
-				if (!array_contains(this.eventTypes, eventType)) {
-					handleError("log4javascript.EventSupport [" + this + "]: removeEventListener: no event called '" + eventType + "'");
-				}
-				array_remove(this.eventListeners[eventType], listener);
-			} else {
-				handleError("log4javascript.EventSupport [" + this + "]: removeEventListener: listener must be a function");
-			}
-		},
-
-		dispatchEvent: function(eventType, eventArgs) {
-			if (array_contains(this.eventTypes, eventType)) {
-				var listeners = this.eventListeners[eventType];
-				for (var i = 0, len = listeners.length; i < len; i++) {
-					listeners[i](this, eventType, eventArgs);
-				}
-			} else {
-				handleError("log4javascript.EventSupport [" + this + "]: dispatchEvent: no event called '" + eventType + "'");
-			}
-		}
-	};
-
-	/* -------------------------------------------------------------------------- */
-
-	var applicationStartDate = new Date();
-	var uniqueId = "log4javascript_" + applicationStartDate.getTime() + "_" +
-		Math.floor(Math.random() * 100000000);
-	var emptyFunction = function() {};
-	var newLine = "\r\n";
-	var pageLoaded = false;
-
-	// Create main log4javascript object; this will be assigned public properties
-	function Log4JavaScript() {}
-	Log4JavaScript.prototype = new EventSupport();
-
-	log4javascript = new Log4JavaScript();
-	log4javascript.version = "1.4.3";
-	log4javascript.edition = "log4javascript";
-
-	/* -------------------------------------------------------------------------- */
-	// Utility functions
-
-	function toStr(obj) {
-		if (obj && obj.toString) {
-			return obj.toString();
-		} else {
-			return String(obj);
-		}
-	}
-
-	function getExceptionMessage(ex) {
-		if (ex.message) {
-			return ex.message;
-		} else if (ex.description) {
-			return ex.description;
-		} else {
-			return toStr(ex);
-		}
-	}
-
-	// Gets the portion of the URL after the last slash
-	function getUrlFileName(url) {
-		var lastSlashIndex = Math.max(url.lastIndexOf("/"), url.lastIndexOf("\\"));
-		return url.substr(lastSlashIndex + 1);
-	}
-
-	// Returns a nicely formatted representation of an error
-	function getExceptionStringRep(ex) {
-		if (ex) {
-			var exStr = "Exception: " + getExceptionMessage(ex);
-			try {
-				if (ex.lineNumber) {
-					exStr += " on line number " + ex.lineNumber;
-				}
-				if (ex.fileName) {
-					exStr += " in file " + getUrlFileName(ex.fileName);
-				}
-			} catch (localEx) {
-				logLog.warn("Unable to obtain file and line information for error");
-			}
-			if (showStackTraces && ex.stack) {
-				exStr += newLine + "Stack trace:" + newLine + ex.stack;
-			}
-			return exStr;
-		}
-		return null;
-	}
-
-	function bool(obj) {
-		return Boolean(obj);
-	}
-
-	function trim(str) {
-		return str.replace(/^\s+/, "").replace(/\s+$/, "");
-	}
-
-	function splitIntoLines(text) {
-		// Ensure all line breaks are \n only
-		var text2 = text.replace(/\r\n/g, "\n").replace(/\r/g, "\n");
-		return text2.split("\n");
-	}
-
-	var urlEncode = (typeof window.encodeURIComponent != "undefined") ?
-		function(str) {
-			return encodeURIComponent(str);
-		}: 
-		function(str) {
-			return escape(str).replace(/\+/g, "%2B").replace(/"/g, "%22").replace(/'/g, "%27").replace(/\//g, "%2F").replace(/=/g, "%3D");
-		};
-
-	var urlDecode = (typeof window.decodeURIComponent != "undefined") ?
-		function(str) {
-			return decodeURIComponent(str);
-		}: 
-		function(str) {
-			return unescape(str).replace(/%2B/g, "+").replace(/%22/g, "\"").replace(/%27/g, "'").replace(/%2F/g, "/").replace(/%3D/g, "=");
-		};
-
-	function array_remove(arr, val) {
-		var index = -1;
-		for (var i = 0, len = arr.length; i < len; i++) {
-			if (arr[i] === val) {
-				index = i;
-				break;
-			}
-		}
-		if (index >= 0) {
-			arr.splice(index, 1);
-			return true;
-		} else {
-			return false;
-		}
-	}
-
-	function array_contains(arr, val) {
-		for(var i = 0, len = arr.length; i < len; i++) {
-			if (arr[i] == val) {
-				return true;
-			}
-		}
-		return false;
-	}
-
-	function extractBooleanFromParam(param, defaultValue) {
-		if (isUndefined(param)) {
-			return defaultValue;
-		} else {
-			return bool(param);
-		}
-	}
-
-	function extractStringFromParam(param, defaultValue) {
-		if (isUndefined(param)) {
-			return defaultValue;
-		} else {
-			return String(param);
-		}
-	}
-
-	function extractIntFromParam(param, defaultValue) {
-		if (isUndefined(param)) {
-			return defaultValue;
-		} else {
-			try {
-				var value = parseInt(param, 10);
-				return isNaN(value) ? defaultValue : value;
-			} catch (ex) {
-				logLog.warn("Invalid int param " + param, ex);
-				return defaultValue;
-			}
-		}
-	}
-
-	function extractFunctionFromParam(param, defaultValue) {
-		if (typeof param == "function") {
-			return param;
-		} else {
-			return defaultValue;
-		}
-	}
-
-	function isError(err) {
-		return (err instanceof Error);
-	}
-
-	if (!Function.prototype.apply){
-		Function.prototype.apply = function(obj, args) {
-			var methodName = "__apply__";
-			if (typeof obj[methodName] != "undefined") {
-				methodName += String(Math.random()).substr(2);
-			}
-			obj[methodName] = this;
-
-			var argsStrings = [];
-			for (var i = 0, len = args.length; i < len; i++) {
-				argsStrings[i] = "args[" + i + "]";
-			}
-			var script = "obj." + methodName + "(" + argsStrings.join(",") + ")";
-			var returnValue = eval(script);
-			delete obj[methodName];
-			return returnValue;
-		};
-	}
-
-	if (!Function.prototype.call){
-		Function.prototype.call = function(obj) {
-			var args = [];
-			for (var i = 1, len = arguments.length; i < len; i++) {
-				args[i - 1] = arguments[i];
-			}
-			return this.apply(obj, args);
-		};
-	}
-
-	function getListenersPropertyName(eventName) {
-		return "__log4javascript_listeners__" + eventName;
-	}
-
-	function addEvent(node, eventName, listener, useCapture, win) {
-		win = win ? win : window;
-		if (node.addEventListener) {
-			node.addEventListener(eventName, listener, useCapture);
-		} else if (node.attachEvent) {
-			node.attachEvent("on" + eventName, listener);
-		} else {
-			var propertyName = getListenersPropertyName(eventName);
-			if (!node[propertyName]) {
-				node[propertyName] = [];
-				// Set event handler
-				node["on" + eventName] = function(evt) {
-					evt = getEvent(evt, win);
-					var listenersPropertyName = getListenersPropertyName(eventName);
-
-					// Clone the array of listeners to leave the original untouched
-					var listeners = this[listenersPropertyName].concat([]);
-					var currentListener;
-
-					// Call each listener in turn
-					while ((currentListener = listeners.shift())) {
-						currentListener.call(this, evt);
-					}
-				};
-			}
-			node[propertyName].push(listener);
-		}
-	}
-
-	function removeEvent(node, eventName, listener, useCapture) {
-		if (node.removeEventListener) {
-			node.removeEventListener(eventName, listener, useCapture);
-		} else if (node.detachEvent) {
-			node.detachEvent("on" + eventName, listener);
-		} else {
-			var propertyName = getListenersPropertyName(eventName);
-			if (node[propertyName]) {
-				array_remove(node[propertyName], listener);
-			}
-		}
-	}
-
-	function getEvent(evt, win) {
-		win = win ? win : window;
-		return evt ? evt : win.event;
-	}
-
-	function stopEventPropagation(evt) {
-		if (evt.stopPropagation) {
-			evt.stopPropagation();
-		} else if (typeof evt.cancelBubble != "undefined") {
-			evt.cancelBubble = true;
-		}
-		evt.returnValue = false;
-	}
-
-	/* ---------------------------------------------------------------------- */
-	// Simple logging for log4javascript itself
-
-	var logLog = {
-		quietMode: false,
-
-		debugMessages: [],
-
-		setQuietMode: function(quietMode) {
-			this.quietMode = bool(quietMode);
-		},
-
-		numberOfErrors: 0,
-
-		alertAllErrors: false,
-
-		setAlertAllErrors: function(alertAllErrors) {
-			this.alertAllErrors = alertAllErrors;
-		},
-
-		debug: function(message) {
-			this.debugMessages.push(message);
-		},
-
-		displayDebug: function() {
-			alert(this.debugMessages.join(newLine));
-		},
-
-		warn: function(message, exception) {
-		},
-
-		error: function(message, exception) {
-			if (++this.numberOfErrors == 1 || this.alertAllErrors) {
-				if (!this.quietMode) {
-					var alertMessage = "log4javascript error: " + message;
-					if (exception) {
-						alertMessage += newLine + newLine + "Original error: " + getExceptionStringRep(exception);
-					}
-					alert(alertMessage);
-				}
-			}
-		}
-	};
-	log4javascript.logLog = logLog;
-
-	log4javascript.setEventTypes(["load", "error"]);
-
-	function handleError(message, exception) {
-		logLog.error(message, exception);
-		log4javascript.dispatchEvent("error", { "message": message, "exception": exception });
-	}
-
-	log4javascript.handleError = handleError;
-
-	/* ---------------------------------------------------------------------- */
-
-	var enabled = !((typeof log4javascript_disabled != "undefined") &&
-					log4javascript_disabled);
-
-	log4javascript.setEnabled = function(enable) {
-		enabled = bool(enable);
-	};
-
-	log4javascript.isEnabled = function() {
-		return enabled;
-	};
-
-	var useTimeStampsInMilliseconds = true;
-
-	log4javascript.setTimeStampsInMilliseconds = function(timeStampsInMilliseconds) {
-		useTimeStampsInMilliseconds = bool(timeStampsInMilliseconds);
-	};
-
-	log4javascript.isTimeStampsInMilliseconds = function() {
-		return useTimeStampsInMilliseconds;
-	};
-	
-
-	// This evaluates the given expression in the current scope, thus allowing
-	// scripts to access private variables. Particularly useful for testing
-	log4javascript.evalInScope = function(expr) {
-		return eval(expr);
-	};
-
-	var showStackTraces = false;
-
-	log4javascript.setShowStackTraces = function(show) {
-		showStackTraces = bool(show);
-	};
-
-	/* ---------------------------------------------------------------------- */
-	// Levels
-
-	var Level = function(level, name) {
-		this.level = level;
-		this.name = name;
-	};
-
-	Level.prototype = {
-		toString: function() {
-			return this.name;
-		},
-		equals: function(level) {
-			return this.level == level.level;
-		},
-		isGreaterOrEqual: function(level) {
-			return this.level >= level.level;
-		}
-	};
-
-	Level.ALL = new Level(Number.MIN_VALUE, "ALL");
-	Level.TRACE = new Level(10000, "TRACE");
-	Level.DEBUG = new Level(20000, "DEBUG");
-	Level.INFO = new Level(30000, "INFO");
-	Level.WARN = new Level(40000, "WARN");
-	Level.ERROR = new Level(50000, "ERROR");
-	Level.FATAL = new Level(60000, "FATAL");
-	Level.OFF = new Level(Number.MAX_VALUE, "OFF");
-
-	log4javascript.Level = Level;
-
-	/* ---------------------------------------------------------------------- */
-	// Timers
-
-	function Timer(name, level) {
-		this.name = name;
-		this.level = isUndefined(level) ? Level.INFO : level;
-		this.start = new Date();
-	}
-
-	Timer.prototype.getElapsedTime = function() {
-		return new Date().getTime() - this.start.getTime();
-	};
-
-	/* ---------------------------------------------------------------------- */
-	// Loggers
-
-	var anonymousLoggerName = "[anonymous]";
-	var defaultLoggerName = "[default]";
-	var nullLoggerName = "[null]";
-	var rootLoggerName = "root";
-
-	function Logger(name) {
-		this.name = name;
-		this.parent = null;
-		this.children = [];
-
-		var appenders = [];
-		var loggerLevel = null;
-		var isRoot = (this.name === rootLoggerName);
-		var isNull = (this.name === nullLoggerName);
-
-		var appenderCache = null;
-		var appenderCacheInvalidated = false;
-		
-		this.addChild = function(childLogger) {
-			this.children.push(childLogger);
-			childLogger.parent = this;
-			childLogger.invalidateAppenderCache();
-		};
-
-		// Additivity
-		var additive = true;
-		this.getAdditivity = function() {
-			return additive;
-		};
-
-		this.setAdditivity = function(additivity) {
-			var valueChanged = (additive != additivity);
-			additive = additivity;
-			if (valueChanged) {
-				this.invalidateAppenderCache();
-			}
-		};
-
-		// Create methods that use the appenders variable in this scope
-		this.addAppender = function(appender) {
-			if (isNull) {
-				handleError("Logger.addAppender: you may not add an appender to the null logger");
-			} else {
-				if (appender instanceof log4javascript.Appender) {
-					if (!array_contains(appenders, appender)) {
-						appenders.push(appender);
-						appender.setAddedToLogger(this);
-						this.invalidateAppenderCache();
-					}
-				} else {
-					handleError("Logger.addAppender: appender supplied ('" +
-						toStr(appender) + "') is not a subclass of Appender");
-				}
-			}
-		};
-
-		this.removeAppender = function(appender) {
-			array_remove(appenders, appender);
-			appender.setRemovedFromLogger(this);
-			this.invalidateAppenderCache();
-		};
-
-		this.removeAllAppenders = function() {
-			var appenderCount = appenders.length;
-			if (appenderCount > 0) {
-				for (var i = 0; i < appenderCount; i++) {
-					appenders[i].setRemovedFromLogger(this);
-				}
-				appenders.length = 0;
-				this.invalidateAppenderCache();
-			}
-		};
-
-		this.getEffectiveAppenders = function() {
-			if (appenderCache === null || appenderCacheInvalidated) {
-				// Build appender cache
-				var parentEffectiveAppenders = (isRoot || !this.getAdditivity()) ?
-					[] : this.parent.getEffectiveAppenders();
-				appenderCache = parentEffectiveAppenders.concat(appenders);
-				appenderCacheInvalidated = false;
-			}
-			return appenderCache;
-		};
-		
-		this.invalidateAppenderCache = function() {
-			appenderCacheInvalidated = true;
-			for (var i = 0, len = this.children.length; i < len; i++) {
-				this.children[i].invalidateAppenderCache();
-			}
-		};
-
-		this.log = function(level, params) {
-			if (enabled && level.isGreaterOrEqual(this.getEffectiveLevel())) {
-				// Check whether last param is an exception
-				var exception;
-				var finalParamIndex = params.length - 1;
-				var lastParam = params[finalParamIndex];
-				if (params.length > 1 && isError(lastParam)) {
-					exception = lastParam;
-					finalParamIndex--;
-				}
-
-				// Construct genuine array for the params
-				var messages = [];
-				for (var i = 0; i <= finalParamIndex; i++) {
-					messages[i] = params[i];
-				}
-
-				var loggingEvent = new LoggingEvent(
-					this, new Date(), level, messages, exception);
-
-				this.callAppenders(loggingEvent);
-			}
-		};
-
-		this.callAppenders = function(loggingEvent) {
-			var effectiveAppenders = this.getEffectiveAppenders();
-			for (var i = 0, len = effectiveAppenders.length; i < len; i++) {
-				effectiveAppenders[i].doAppend(loggingEvent);
-			}
-		};
-
-		this.setLevel = function(level) {
-			// Having a level of null on the root logger would be very bad.
-			if (isRoot && level === null) {
-				handleError("Logger.setLevel: you cannot set the level of the root logger to null");
-			} else if (level instanceof Level) {
-				loggerLevel = level;
-			} else {
-				handleError("Logger.setLevel: level supplied to logger " +
-					this.name + " is not an instance of log4javascript.Level");
-			}
-		};
-
-		this.getLevel = function() {
-			return loggerLevel;
-		};
-
-		this.getEffectiveLevel = function() {
-			for (var logger = this; logger !== null; logger = logger.parent) {
-				var level = logger.getLevel();
-				if (level !== null) {
-					return level;
-				}
-			}
-		};
-
-		this.group = function(name, initiallyExpanded) {
-			if (enabled) {
-				var effectiveAppenders = this.getEffectiveAppenders();
-				for (var i = 0, len = effectiveAppenders.length; i < len; i++) {
-					effectiveAppenders[i].group(name, initiallyExpanded);
-				}
-			}
-		};
-
-		this.groupEnd = function(name) {
-			if (enabled) {
-				var effectiveAppenders = this.getEffectiveAppenders();
-				for (var i = 0, len = effectiveAppenders.length; i < len; i++) {
-					effectiveAppenders[i].groupEnd();
-				}
-			}
-		};
-
-		var timers = {};
-
-		this.time = function(name, level) {
-			if (enabled) {
-				if (isUndefined(name)) {
-					handleError("Logger.time: a name for the timer must be supplied");
-				} else if (level && !(level instanceof Level)) {
-					handleError("Logger.time: level supplied to timer " +
-						name + " is not an instance of log4javascript.Level");
-				} else {
-					timers[name] = new Timer(name, level);
-				}
-			}
-		};
-
-		this.timeEnd = function(name) {
-			if (enabled) {
-				if (isUndefined(name)) {
-					handleError("Logger.timeEnd: a name for the timer must be supplied");
-				} else if (timers[name]) {
-					var timer = timers[name];
-					var milliseconds = timer.getElapsedTime();
-					this.log(timer.level, ["Timer " + toStr(name) + " completed in " + milliseconds + "ms"]);
-					delete timers[name];
-				} else {
-					logLog.warn("Logger.timeEnd: no timer found with name " + name);
-				}
-			}
-		};
-
-		this.assert = function(expr) {
-			if (enabled && !expr) {
-				var args = [];
-				for (var i = 1, len = arguments.length; i < len; i++) {
-					args.push(arguments[i]);
-				}
-				args = (args.length > 0) ? args : ["Assertion Failure"];
-				args.push(newLine);
-				args.push(expr);
-				this.log(Level.ERROR, args);
-			}
-		};
-
-		this.toString = function() {
-			return "Logger[" + this.name + "]";
-		};
-	}
-
-	Logger.prototype = {
-		trace: function() {
-			this.log(Level.TRACE, arguments);
-		},
-
-		debug: function() {
-			this.log(Level.DEBUG, arguments);
-		},
-
-		info: function() {
-			this.log(Level.INFO, arguments);
-		},
-
-		warn: function() {
-			this.log(Level.WARN, arguments);
-		},
-
-		error: function() {
-			this.log(Level.ERROR, arguments);
-		},
-
-		fatal: function() {
-			this.log(Level.FATAL, arguments);
-		},
-
-		isEnabledFor: function(level) {
-			return level.isGreaterOrEqual(this.getEffectiveLevel());
-		},
-
-		isTraceEnabled: function() {
-			return this.isEnabledFor(Level.TRACE);
-		},
-
-		isDebugEnabled: function() {
-			return this.isEnabledFor(Level.DEBUG);
-		},
-
-		isInfoEnabled: function() {
-			return this.isEnabledFor(Level.INFO);
-		},
-
-		isWarnEnabled: function() {
-			return this.isEnabledFor(Level.WARN);
-		},
-
-		isErrorEnabled: function() {
-			return this.isEnabledFor(Level.ERROR);
-		},
-
-		isFatalEnabled: function() {
-			return this.isEnabledFor(Level.FATAL);
-		}
-	};
-
-	Logger.prototype.trace.isEntryPoint = true;
-	Logger.prototype.debug.isEntryPoint = true;
-	Logger.prototype.info.isEntryPoint = true;
-	Logger.prototype.warn.isEntryPoint = true;
-	Logger.prototype.error.isEntryPoint = true;
-	Logger.prototype.fatal.isEntryPoint = true;
-
-	/* ---------------------------------------------------------------------- */
-	// Logger access methods
-
-	// Hashtable of loggers keyed by logger name
-	var loggers = {};
-	var loggerNames = [];
-
-	var ROOT_LOGGER_DEFAULT_LEVEL = Level.DEBUG;
-	var rootLogger = new Logger(rootLoggerName);
-	rootLogger.setLevel(ROOT_LOGGER_DEFAULT_LEVEL);
-
-	log4javascript.getRootLogger = function() {
-		return rootLogger;
-	};
-
-	log4javascript.getLogger = function(loggerName) {
-		// Use default logger if loggerName is not specified or invalid
-		if (!(typeof loggerName == "string")) {
-			loggerName = anonymousLoggerName;
-			logLog.warn("log4javascript.getLogger: non-string logger name "	+
-				toStr(loggerName) + " supplied, returning anonymous logger");
-		}
-
-		// Do not allow retrieval of the root logger by name
-		if (loggerName == rootLoggerName) {
-			handleError("log4javascript.getLogger: root logger may not be obtained by name");
-		}
-
-		// Create the logger for this name if it doesn't already exist
-		if (!loggers[loggerName]) {
-			var logger = new Logger(loggerName);
-			loggers[loggerName] = logger;
-			loggerNames.push(loggerName);
-
-			// Set up parent logger, if it doesn't exist
-			var lastDotIndex = loggerName.lastIndexOf(".");
-			var parentLogger;
-			if (lastDotIndex > -1) {
-				var parentLoggerName = loggerName.substring(0, lastDotIndex);
-				parentLogger = log4javascript.getLogger(parentLoggerName); // Recursively sets up grandparents etc.
-			} else {
-				parentLogger = rootLogger;
-			}
-			parentLogger.addChild(logger);
-		}
-		return loggers[loggerName];
-	};
-
-	var defaultLogger = null;
-	log4javascript.getDefaultLogger = function() {
-		if (!defaultLogger) {
-			defaultLogger = log4javascript.getLogger(defaultLoggerName);
-			var a = new log4javascript.PopUpAppender();
-			defaultLogger.addAppender(a);
-		}
-		return defaultLogger;
-	};
-
-	var nullLogger = null;
-	log4javascript.getNullLogger = function() {
-		if (!nullLogger) {
-			nullLogger = new Logger(nullLoggerName);
-			nullLogger.setLevel(Level.OFF);
-		}
-		return nullLogger;
-	};
-
-	// Destroys all loggers
-	log4javascript.resetConfiguration = function() {
-		rootLogger.setLevel(ROOT_LOGGER_DEFAULT_LEVEL);
-		loggers = {};
-	};
-
-	/* ---------------------------------------------------------------------- */
-	// Logging events
-
-	var LoggingEvent = function(logger, timeStamp, level, messages,
-			exception) {
-		this.logger = logger;
-		this.timeStamp = timeStamp;
-		this.timeStampInMilliseconds = timeStamp.getTime();
-		this.timeStampInSeconds = Math.floor(this.timeStampInMilliseconds / 1000);
-		this.milliseconds = this.timeStamp.getMilliseconds();
-		this.level = level;
-		this.messages = messages;
-		this.exception = exception;
-	};
-
-	LoggingEvent.prototype = {
-		getThrowableStrRep: function() {
-			return this.exception ?
-				getExceptionStringRep(this.exception) : "";
-		},
-		getCombinedMessages: function() {
-			return (this.messages.length == 1) ? this.messages[0] :
-				   this.messages.join(newLine);
-		},
-		toString: function() {
-			return "LoggingEvent[" + this.level + "]";
-		}
-	};
-
-	log4javascript.LoggingEvent = LoggingEvent;
-
-	/* ---------------------------------------------------------------------- */
-	// Layout prototype
-
-	var Layout = function() {
-	};
-
-	Layout.prototype = {
-		defaults: {
-			loggerKey: "logger",
-			timeStampKey: "timestamp",
-			millisecondsKey: "milliseconds",
-			levelKey: "level",
-			messageKey: "message",
-			exceptionKey: "exception",
-			urlKey: "url"
-		},
-		loggerKey: "logger",
-		timeStampKey: "timestamp",
-		millisecondsKey: "milliseconds",
-		levelKey: "level",
-		messageKey: "message",
-		exceptionKey: "exception",
-		urlKey: "url",
-		batchHeader: "",
-		batchFooter: "",
-		batchSeparator: "",
-		returnsPostData: false,
-		overrideTimeStampsSetting: false,
-		useTimeStampsInMilliseconds: null,
-
-		format: function() {
-			handleError("Layout.format: layout supplied has no format() method");
-		},
-
-		ignoresThrowable: function() {
-			handleError("Layout.ignoresThrowable: layout supplied has no ignoresThrowable() method");
-		},
-
-		getContentType: function() {
-			return "text/plain";
-		},
-
-		allowBatching: function() {
-			return true;
-		},
-
-		setTimeStampsInMilliseconds: function(timeStampsInMilliseconds) {
-			this.overrideTimeStampsSetting = true;
-			this.useTimeStampsInMilliseconds = bool(timeStampsInMilliseconds);
-		},
-
-		isTimeStampsInMilliseconds: function() {
-			return this.overrideTimeStampsSetting ?
-				this.useTimeStampsInMilliseconds : useTimeStampsInMilliseconds;
-		},
-
-		getTimeStampValue: function(loggingEvent) {
-			return this.isTimeStampsInMilliseconds() ?
-				loggingEvent.timeStampInMilliseconds : loggingEvent.timeStampInSeconds;
-		},
-
-		getDataValues: function(loggingEvent, combineMessages) {
-			var dataValues = [
-				[this.loggerKey, loggingEvent.logger.name],
-				[this.timeStampKey, this.getTimeStampValue(loggingEvent)],
-				[this.levelKey, loggingEvent.level.name],
-				[this.urlKey, window.location.href],
-				[this.messageKey, combineMessages ? loggingEvent.getCombinedMessages() : loggingEvent.messages]
-			];
-			if (!this.isTimeStampsInMilliseconds()) {
-				dataValues.push([this.millisecondsKey, loggingEvent.milliseconds]);
-			}
-			if (loggingEvent.exception) {
-				dataValues.push([this.exceptionKey, getExceptionStringRep(loggingEvent.exception)]);
-			}
-			if (this.hasCustomFields()) {
-				for (var i = 0, len = this.customFields.length; i < len; i++) {
-					var val = this.customFields[i].value;
-
-					// Check if the value is a function. If so, execute it, passing it the
-					// current layout and the logging event
-					if (typeof val === "function") {
-						val = val(this, loggingEvent);
-					}
-					dataValues.push([this.customFields[i].name, val]);
-				}
-			}
-			return dataValues;
-		},
-
-		setKeys: function(loggerKey, timeStampKey, levelKey, messageKey,
-				exceptionKey, urlKey, millisecondsKey) {
-			this.loggerKey = extractStringFromParam(loggerKey, this.defaults.loggerKey);
-			this.timeStampKey = extractStringFromParam(timeStampKey, this.defaults.timeStampKey);
-			this.levelKey = extractStringFromParam(levelKey, this.defaults.levelKey);
-			this.messageKey = extractStringFromParam(messageKey, this.defaults.messageKey);
-			this.exceptionKey = extractStringFromParam(exceptionKey, this.defaults.exceptionKey);
-			this.urlKey = extractStringFromParam(urlKey, this.defaults.urlKey);
-			this.millisecondsKey = extractStringFromParam(millisecondsKey, this.defaults.millisecondsKey);
-		},
-
-		setCustomField: function(name, value) {
-			var fieldUpdated = false;
-			for (var i = 0, len = this.customFields.length; i < len; i++) {
-				if (this.customFields[i].name === name) {
-					this.customFields[i].value = value;
-					fieldUpdated = true;
-				}
-			}
-			if (!fieldUpdated) {
-				this.customFields.push({"name": name, "value": value});
-			}
-		},
-
-		hasCustomFields: function() {
-			return (this.customFields.length > 0);
-		},
-
-		toString: function() {
-			handleError("Layout.toString: all layouts must override this method");
-		}
-	};
-
-	log4javascript.Layout = Layout;
-
-	/* ---------------------------------------------------------------------- */
-	// Appender prototype
-
-	var Appender = function() {};
-
-	Appender.prototype = new EventSupport();
-
-	Appender.prototype.layout = new PatternLayout();
-	Appender.prototype.threshold = Level.ALL;
-	Appender.prototype.loggers = [];
-
-	// Performs threshold checks before delegating actual logging to the
-	// subclass's specific append method.
-	Appender.prototype.doAppend = function(loggingEvent) {
-		if (enabled && loggingEvent.level.level >= this.threshold.level) {
-			this.append(loggingEvent);
-		}
-	};
-
-	Appender.prototype.append = function(loggingEvent) {};
-
-	Appender.prototype.setLayout = function(layout) {
-		if (layout instanceof Layout) {
-			this.layout = layout;
-		} else {
-			handleError("Appender.setLayout: layout supplied to " +
-				this.toString() + " is not a subclass of Layout");
-		}
-	};
-
-	Appender.prototype.getLayout = function() {
-		return this.layout;
-	};
-
-	Appender.prototype.setThreshold = function(threshold) {
-		if (threshold instanceof Level) {
-			this.threshold = threshold;
-		} else {
-			handleError("Appender.setThreshold: threshold supplied to " +
-				this.toString() + " is not a subclass of Level");
-		}
-	};
-
-	Appender.prototype.getThreshold = function() {
-		return this.threshold;
-	};
-
-	Appender.prototype.setAddedToLogger = function(logger) {
-		this.loggers.push(logger);
-	};
-
-	Appender.prototype.setRemovedFromLogger = function(logger) {
-		array_remove(this.loggers, logger);
-	};
-
-	Appender.prototype.group = emptyFunction;
-	Appender.prototype.groupEnd = emptyFunction;
-
-	Appender.prototype.toString = function() {
-		handleError("Appender.toString: all appenders must override this method");
-	};
-
-	log4javascript.Appender = Appender;
-
-	/* ---------------------------------------------------------------------- */
-	// SimpleLayout 
-
-	function SimpleLayout() {
-		this.customFields = [];
-	}
-
-	SimpleLayout.prototype = new Layout();
-
-	SimpleLayout.prototype.format = function(loggingEvent) {
-		return loggingEvent.level.name + " - " + loggingEvent.getCombinedMessages();
-	};
-
-	SimpleLayout.prototype.ignoresThrowable = function() {
-	    return true;
-	};
-
-	SimpleLayout.prototype.toString = function() {
-	    return "SimpleLayout";
-	};
-
-	log4javascript.SimpleLayout = SimpleLayout;
-	/* ----------------------------------------------------------------------- */
-	// NullLayout 
-
-	function NullLayout() {
-		this.customFields = [];
-	}
-
-	NullLayout.prototype = new Layout();
-
-	NullLayout.prototype.format = function(loggingEvent) {
-		return loggingEvent.messages;
-	};
-
-	NullLayout.prototype.ignoresThrowable = function() {
-	    return true;
-	};
-
-	NullLayout.prototype.toString = function() {
-	    return "NullLayout";
-	};
-
-	log4javascript.NullLayout = NullLayout;
-/* ---------------------------------------------------------------------- */
-	// XmlLayout
-
-	function XmlLayout(combineMessages) {
-		this.combineMessages = extractBooleanFromParam(combineMessages, true);
-		this.customFields = [];
-	}
-
-	XmlLayout.prototype = new Layout();
-
-	XmlLayout.prototype.isCombinedMessages = function() {
-		return this.combineMessages;
-	};
-
-	XmlLayout.prototype.getContentType = function() {
-		return "text/xml";
-	};
-
-	XmlLayout.prototype.escapeCdata = function(str) {
-		return str.replace(/\]\]>/, "]]>]]&gt;<![CDATA[");
-	};
-
-	XmlLayout.prototype.format = function(loggingEvent) {
-		var layout = this;
-		var i, len;
-		function formatMessage(message) {
-			message = (typeof message === "string") ? message : toStr(message);
-			return "<log4javascript:message><![CDATA[" +
-				layout.escapeCdata(message) + "]]></log4javascript:message>";
-		}
-
-		var str = "<log4javascript:event logger=\"" + loggingEvent.logger.name +
-			"\" timestamp=\"" + this.getTimeStampValue(loggingEvent) + "\"";
-		if (!this.isTimeStampsInMilliseconds()) {
-			str += " milliseconds=\"" + loggingEvent.milliseconds + "\"";
-		}
-		str += " level=\"" + loggingEvent.level.name + "\">" + newLine;
-		if (this.combineMessages) {
-			str += formatMessage(loggingEvent.getCombinedMessages());
-		} else {
-			str += "<log4javascript:messages>" + newLine;
-			for (i = 0, len = loggingEvent.messages.length; i < len; i++) {
-				str += formatMessage(loggingEvent.messages[i]) + newLine;
-			}
-			str += "</log4javascript:messages>" + newLine;
-		}
-		if (this.hasCustomFields()) {
-			for (i = 0, len = this.customFields.length; i < len; i++) {
-				str += "<log4javascript:customfield name=\"" +
-					this.customFields[i].name + "\"><![CDATA[" +
-					this.customFields[i].value.toString() +
-					"]]></log4javascript:customfield>" + newLine;
-			}
-		}
-		if (loggingEvent.exception) {
-			str += "<log4javascript:exception><![CDATA[" +
-				getExceptionStringRep(loggingEvent.exception) +
-				"]]></log4javascript:exception>" + newLine;
-		}
-		str += "</log4javascript:event>" + newLine + newLine;
-		return str;
-	};
-
-	XmlLayout.prototype.ignoresThrowable = function() {
-	    return false;
-	};
-
-	XmlLayout.prototype.toString = function() {
-	    return "XmlLayout";
-	};
-
-	log4javascript.XmlLayout = XmlLayout;
-	/* ---------------------------------------------------------------------- */
-	// JsonLayout related
-
-	function escapeNewLines(str) {
-		return str.replace(/\r\n|\r|\n/g, "\\r\\n");
-	}
-
-	function JsonLayout(readable, combineMessages) {
-		this.readable = extractBooleanFromParam(readable, false);
-		this.combineMessages = extractBooleanFromParam(combineMessages, true);
-		this.batchHeader = this.readable ? "[" + newLine : "[";
-		this.batchFooter = this.readable ? "]" + newLine : "]";
-		this.batchSeparator = this.readable ? "," + newLine : ",";
-		this.setKeys();
-		this.colon = this.readable ? ": " : ":";
-		this.tab = this.readable ? "\t" : "";
-		this.lineBreak = this.readable ? newLine : "";
-		this.customFields = [];
-	}
-
-	/* ---------------------------------------------------------------------- */
-	// JsonLayout
-
-	JsonLayout.prototype = new Layout();
-
-	JsonLayout.prototype.isReadable = function() {
-		return this.readable;
-	};
-
-	JsonLayout.prototype.isCombinedMessages = function() {
-		return this.combineMessages;
-	};
-
-    JsonLayout.prototype.format = function(loggingEvent) {
-        var layout = this;
-        var dataValues = this.getDataValues(loggingEvent, this.combineMessages);
-        var str = "{" + this.lineBreak;
-        var i, len;
-
-        function formatValue(val, prefix, expand) {
-            // Check the type of the data value to decide whether quotation marks
-            // or expansion are required
-            var formattedValue;
-            var valType = typeof val;
-            if (val instanceof Date) {
-                formattedValue = String(val.getTime());
-            } else if (expand && (val instanceof Array)) {
-                formattedValue = "[" + layout.lineBreak;
-                for (var i = 0, len = val.length; i < len; i++) {
-                    var childPrefix = prefix + layout.tab;
-                    formattedValue += childPrefix + formatValue(val[i], childPrefix, false);
-                    if (i < val.length - 1) {
-                        formattedValue += ",";
-                    }
-                    formattedValue += layout.lineBreak;
-                }
-                formattedValue += prefix + "]";
-            } else if (valType !== "number" && valType !== "boolean") {
-                formattedValue = "\"" + escapeNewLines(toStr(val).replace(/\"/g, "\\\"")) + "\"";
+(function() {
+    // source: https://developer.mozilla.org/en-US/docs/JavaScript/Reference/Global_Objects/Function/bind
+    if (!Function.prototype.bind) {
+        Function.prototype.bind = function (oThis) {
+            if (typeof this !== "function") {
+                // closest thing possible to the ECMAScript 5 internal IsCallable function
+                throw new TypeError("Function.prototype.bind - what is trying to be bound is not callable");
+            }
+
+            var aArgs = Array.prototype.slice.call(arguments, 1),
+                fToBind = this,
+                fNOP = function () {},
+                fBound = function () {
+                    return fToBind.apply(this instanceof fNOP &&
+                            oThis ? this : oThis,
+                            aArgs.concat(Array.prototype.slice.call(arguments)));
+                };
+            fNOP.prototype = this.prototype;
+            fBound.prototype = new fNOP();
+
+            return fBound;
+        };
+    }
+
+    var root,    // root logger instance
+        writer;  // writer instance, used to output log entries
+
+    var Level = {
+        DEBUG: 10,
+        INFO: 20,
+        WARN: 30,
+        ERROR: 40,
+        FATAL: 50
+    };
+
+    function IEConsoleWriter() {
+    }
+
+    IEConsoleWriter.prototype = {
+        output:  function(log_name, level, messages) {
+            // console.log will magically appear in IE8 when the user opens the
+            // F12 Developer Tools, so we have to test for it every time.
+            if (console===undefined || console.log===undefined)
+                    return;
+            if (log_name)
+                messages.unshift(log_name+":");
+            var message = messages.join(" ");
+
+            // Under some conditions console.log will be available but the
+            // other functions are missing.
+            if (console.info===undefined) {
+                var level_name;
+                if (level<=Level.DEBUG)
+                    level_name="DEBUG";
+                else if (level<=Level.INFO)
+                    level_name="INFO";
+                else if (level<=Level.WARN)
+                    level_name="WARN";
+                else if (level<=Level.ERROR)
+                    level_name="ERROR";
+                else
+                    level_name="FATAL";
+                console.log("["+level_name+"] "+message);
             } else {
-                formattedValue = val;
+                if (level<=Level.DEBUG) {
+                    // console.debug exists but is deprecated
+                    message="[DEBUG] "+message;
+                    console.log(message);
+                } else if (level<=Level.INFO)
+                    console.info(message);
+                else if (level<=Level.WARN)
+                    console.warn(message);
+                else
+                    console.error(message);
             }
-            return formattedValue;
         }
-
-        for (i = 0, len = dataValues.length - 1; i <= len; i++) {
-            str += this.tab + "\"" + dataValues[i][0] + "\"" + this.colon + formatValue(dataValues[i][1], this.tab, true);
-            if (i < len) {
-                str += ",";
-            }
-            str += this.lineBreak;
-        }
-
-        str += "}" + this.lineBreak;
-        return str;
     };
 
-	JsonLayout.prototype.ignoresThrowable = function() {
-	    return false;
-	};
 
-	JsonLayout.prototype.toString = function() {
-	    return "JsonLayout";
-	};
-
-	JsonLayout.prototype.getContentType = function() {
-		return "application/json";
-	};
-
-	log4javascript.JsonLayout = JsonLayout;
-	/* ---------------------------------------------------------------------- */
-	// HttpPostDataLayout
-
-	function HttpPostDataLayout() {
-		this.setKeys();
-		this.customFields = [];
-		this.returnsPostData = true;
-	}
-
-	HttpPostDataLayout.prototype = new Layout();
-
-	// Disable batching
-	HttpPostDataLayout.prototype.allowBatching = function() {
-		return false;
-	};
-
-	HttpPostDataLayout.prototype.format = function(loggingEvent) {
-		var dataValues = this.getDataValues(loggingEvent);
-		var queryBits = [];
-		for (var i = 0, len = dataValues.length; i < len; i++) {
-			var val = (dataValues[i][1] instanceof Date) ?
-				String(dataValues[i][1].getTime()) : dataValues[i][1];
-			queryBits.push(urlEncode(dataValues[i][0]) + "=" + urlEncode(val));
-		}
-		return queryBits.join("&");
-	};
-
-	HttpPostDataLayout.prototype.ignoresThrowable = function(loggingEvent) {
-	    return false;
-	};
-
-	HttpPostDataLayout.prototype.toString = function() {
-	    return "HttpPostDataLayout";
-	};
-
-	log4javascript.HttpPostDataLayout = HttpPostDataLayout;
-	/* ---------------------------------------------------------------------- */
-	// formatObjectExpansion
-
-	function formatObjectExpansion(obj, depth, indentation) {
-		var objectsExpanded = [];
-
-		function doFormat(obj, depth, indentation) {
-			var i, j, len, childDepth, childIndentation, childLines, expansion,
-				childExpansion;
-
-			if (!indentation) {
-				indentation = "";
-			}
-
-			function formatString(text) {
-				var lines = splitIntoLines(text);
-				for (var j = 1, jLen = lines.length; j < jLen; j++) {
-					lines[j] = indentation + lines[j];
-				}
-				return lines.join(newLine);
-			}
-
-			if (obj === null) {
-				return "null";
-			} else if (typeof obj == "undefined") {
-				return "undefined";
-			} else if (typeof obj == "string") {
-				return formatString(obj);
-			} else if (typeof obj == "object" && array_contains(objectsExpanded, obj)) {
-				try {
-					expansion = toStr(obj);
-				} catch (ex) {
-					expansion = "Error formatting property. Details: " + getExceptionStringRep(ex);
-				}
-				return expansion + " [already expanded]";
-			} else if ((obj instanceof Array) && depth > 0) {
-				objectsExpanded.push(obj);
-				expansion = "[" + newLine;
-				childDepth = depth - 1;
-				childIndentation = indentation + "  ";
-				childLines = [];
-				for (i = 0, len = obj.length; i < len; i++) {
-					try {
-						childExpansion = doFormat(obj[i], childDepth, childIndentation);
-						childLines.push(childIndentation + childExpansion);
-					} catch (ex) {
-						childLines.push(childIndentation + "Error formatting array member. Details: " +
-							getExceptionStringRep(ex) + "");
-					}
-				}
-				expansion += childLines.join("," + newLine) + newLine + indentation + "]";
-				return expansion;
-            } else if (Object.prototype.toString.call(obj) == "[object Date]") {
-                return obj.toString();
-			} else if (typeof obj == "object" && depth > 0) {
-				objectsExpanded.push(obj);
-				expansion = "{" + newLine;
-				childDepth = depth - 1;
-				childIndentation = indentation + "  ";
-				childLines = [];
-				for (i in obj) {
-					try {
-						childExpansion = doFormat(obj[i], childDepth, childIndentation);
-						childLines.push(childIndentation + i + ": " + childExpansion);
-					} catch (ex) {
-						childLines.push(childIndentation + i + ": Error formatting property. Details: " +
-							getExceptionStringRep(ex));
-					}
-				}
-				expansion += childLines.join("," + newLine) + newLine + indentation + "}";
-				return expansion;
-			} else {
-				return formatString(toStr(obj));
-			}
-		}
-		return doFormat(obj, depth, indentation);
-	}
-	/* ---------------------------------------------------------------------- */
-	// Date-related stuff
-
-	var SimpleDateFormat;
-
-	(function() {
-		var regex = /('[^']*')|(G+|y+|M+|w+|W+|D+|d+|F+|E+|a+|H+|k+|K+|h+|m+|s+|S+|Z+)|([a-zA-Z]+)|([^a-zA-Z']+)/;
-		var monthNames = ["January", "February", "March", "April", "May", "June",
-			"July", "August", "September", "October", "November", "December"];
-		var dayNames = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
-		var TEXT2 = 0, TEXT3 = 1, NUMBER = 2, YEAR = 3, MONTH = 4, TIMEZONE = 5;
-		var types = {
-			G : TEXT2,
-			y : YEAR,
-			M : MONTH,
-			w : NUMBER,
-			W : NUMBER,
-			D : NUMBER,
-			d : NUMBER,
-			F : NUMBER,
-			E : TEXT3,
-			a : TEXT2,
-			H : NUMBER,
-			k : NUMBER,
-			K : NUMBER,
-			h : NUMBER,
-			m : NUMBER,
-			s : NUMBER,
-			S : NUMBER,
-			Z : TIMEZONE
-		};
-		var ONE_DAY = 24 * 60 * 60 * 1000;
-		var ONE_WEEK = 7 * ONE_DAY;
-		var DEFAULT_MINIMAL_DAYS_IN_FIRST_WEEK = 1;
-
-		var newDateAtMidnight = function(year, month, day) {
-			var d = new Date(year, month, day, 0, 0, 0);
-			d.setMilliseconds(0);
-			return d;
-		};
-
-		Date.prototype.getDifference = function(date) {
-			return this.getTime() - date.getTime();
-		};
-
-		Date.prototype.isBefore = function(d) {
-			return this.getTime() < d.getTime();
-		};
-
-		Date.prototype.getUTCTime = function() {
-			return Date.UTC(this.getFullYear(), this.getMonth(), this.getDate(), this.getHours(), this.getMinutes(),
-					this.getSeconds(), this.getMilliseconds());
-		};
-
-		Date.prototype.getTimeSince = function(d) {
-			return this.getUTCTime() - d.getUTCTime();
-		};
-
-		Date.prototype.getPreviousSunday = function() {
-			// Using midday avoids any possibility of DST messing things up
-			var midday = new Date(this.getFullYear(), this.getMonth(), this.getDate(), 12, 0, 0);
-			var previousSunday = new Date(midday.getTime() - this.getDay() * ONE_DAY);
-			return newDateAtMidnight(previousSunday.getFullYear(), previousSunday.getMonth(),
-					previousSunday.getDate());
-		};
-
-		Date.prototype.getWeekInYear = function(minimalDaysInFirstWeek) {
-			if (isUndefined(this.minimalDaysInFirstWeek)) {
-				minimalDaysInFirstWeek = DEFAULT_MINIMAL_DAYS_IN_FIRST_WEEK;
-			}
-			var previousSunday = this.getPreviousSunday();
-			var startOfYear = newDateAtMidnight(this.getFullYear(), 0, 1);
-			var numberOfSundays = previousSunday.isBefore(startOfYear) ?
-				0 : 1 + Math.floor(previousSunday.getTimeSince(startOfYear) / ONE_WEEK);
-			var numberOfDaysInFirstWeek =  7 - startOfYear.getDay();
-			var weekInYear = numberOfSundays;
-			if (numberOfDaysInFirstWeek < minimalDaysInFirstWeek) {
-				weekInYear--;
-			}
-			return weekInYear;
-		};
-
-		Date.prototype.getWeekInMonth = function(minimalDaysInFirstWeek) {
-			if (isUndefined(this.minimalDaysInFirstWeek)) {
-				minimalDaysInFirstWeek = DEFAULT_MINIMAL_DAYS_IN_FIRST_WEEK;
-			}
-			var previousSunday = this.getPreviousSunday();
-			var startOfMonth = newDateAtMidnight(this.getFullYear(), this.getMonth(), 1);
-			var numberOfSundays = previousSunday.isBefore(startOfMonth) ?
-				0 : 1 + Math.floor(previousSunday.getTimeSince(startOfMonth) / ONE_WEEK);
-			var numberOfDaysInFirstWeek =  7 - startOfMonth.getDay();
-			var weekInMonth = numberOfSundays;
-			if (numberOfDaysInFirstWeek >= minimalDaysInFirstWeek) {
-				weekInMonth++;
-			}
-			return weekInMonth;
-		};
-
-		Date.prototype.getDayInYear = function() {
-			var startOfYear = newDateAtMidnight(this.getFullYear(), 0, 1);
-			return 1 + Math.floor(this.getTimeSince(startOfYear) / ONE_DAY);
-		};
-
-		/* ------------------------------------------------------------------ */
-
-		SimpleDateFormat = function(formatString) {
-			this.formatString = formatString;
-		};
-
-		/**
-		 * Sets the minimum number of days in a week in order for that week to
-		 * be considered as belonging to a particular month or year
-		 */
-		SimpleDateFormat.prototype.setMinimalDaysInFirstWeek = function(days) {
-			this.minimalDaysInFirstWeek = days;
-		};
-
-		SimpleDateFormat.prototype.getMinimalDaysInFirstWeek = function() {
-			return isUndefined(this.minimalDaysInFirstWeek)	?
-				DEFAULT_MINIMAL_DAYS_IN_FIRST_WEEK : this.minimalDaysInFirstWeek;
-		};
-
-		var padWithZeroes = function(str, len) {
-			while (str.length < len) {
-				str = "0" + str;
-			}
-			return str;
-		};
-
-		var formatText = function(data, numberOfLetters, minLength) {
-			return (numberOfLetters >= 4) ? data : data.substr(0, Math.max(minLength, numberOfLetters));
-		};
-
-		var formatNumber = function(data, numberOfLetters) {
-			var dataString = "" + data;
-			// Pad with 0s as necessary
-			return padWithZeroes(dataString, numberOfLetters);
-		};
-
-		SimpleDateFormat.prototype.format = function(date) {
-			var formattedString = "";
-			var result;
-			var searchString = this.formatString;
-			while ((result = regex.exec(searchString))) {
-				var quotedString = result[1];
-				var patternLetters = result[2];
-				var otherLetters = result[3];
-				var otherCharacters = result[4];
-
-				// If the pattern matched is quoted string, output the text between the quotes
-				if (quotedString) {
-					if (quotedString == "''") {
-						formattedString += "'";
-					} else {
-						formattedString += quotedString.substring(1, quotedString.length - 1);
-					}
-				} else if (otherLetters) {
-					// Swallow non-pattern letters by doing nothing here
-				} else if (otherCharacters) {
-					// Simply output other characters
-					formattedString += otherCharacters;
-				} else if (patternLetters) {
-					// Replace pattern letters
-					var patternLetter = patternLetters.charAt(0);
-					var numberOfLetters = patternLetters.length;
-					var rawData = "";
-					switch(patternLetter) {
-						case "G":
-							rawData = "AD";
-							break;
-						case "y":
-							rawData = date.getFullYear();
-							break;
-						case "M":
-							rawData = date.getMonth();
-							break;
-						case "w":
-							rawData = date.getWeekInYear(this.getMinimalDaysInFirstWeek());
-							break;
-						case "W":
-							rawData = date.getWeekInMonth(this.getMinimalDaysInFirstWeek());
-							break;
-						case "D":
-							rawData = date.getDayInYear();
-							break;
-						case "d":
-							rawData = date.getDate();
-							break;
-						case "F":
-							rawData = 1 + Math.floor((date.getDate() - 1) / 7);
-							break;
-						case "E":
-							rawData = dayNames[date.getDay()];
-							break;
-						case "a":
-							rawData = (date.getHours() >= 12) ? "PM" : "AM";
-							break;
-						case "H":
-							rawData = date.getHours();
-							break;
-						case "k":
-							rawData = date.getHours() || 24;
-							break;
-						case "K":
-							rawData = date.getHours() % 12;
-							break;
-						case "h":
-							rawData = (date.getHours() % 12) || 12;
-							break;
-						case "m":
-							rawData = date.getMinutes();
-							break;
-						case "s":
-							rawData = date.getSeconds();
-							break;
-						case "S":
-							rawData = date.getMilliseconds();
-							break;
-						case "Z":
-							rawData = date.getTimezoneOffset(); // This returns the number of minutes since GMT was this time.
-							break;
-					}
-					// Format the raw data depending on the type
-					switch(types[patternLetter]) {
-						case TEXT2:
-							formattedString += formatText(rawData, numberOfLetters, 2);
-							break;
-						case TEXT3:
-							formattedString += formatText(rawData, numberOfLetters, 3);
-							break;
-						case NUMBER:
-							formattedString += formatNumber(rawData, numberOfLetters);
-							break;
-						case YEAR:
-							if (numberOfLetters <= 3) {
-								// Output a 2-digit year
-								var dataString = "" + rawData;
-								formattedString += dataString.substr(2, 2);
-							} else {
-								formattedString += formatNumber(rawData, numberOfLetters);
-							}
-							break;
-						case MONTH:
-							if (numberOfLetters >= 3) {
-								formattedString += formatText(monthNames[rawData], numberOfLetters, numberOfLetters);
-							} else {
-								// NB. Months returned by getMonth are zero-based
-								formattedString += formatNumber(rawData + 1, numberOfLetters);
-							}
-							break;
-						case TIMEZONE:
-							var isPositive = (rawData > 0);
-							// The following line looks like a mistake but isn't
-							// because of the way getTimezoneOffset measures.
-							var prefix = isPositive ? "-" : "+";
-							var absData = Math.abs(rawData);
-
-							// Hours
-							var hours = "" + Math.floor(absData / 60);
-							hours = padWithZeroes(hours, 2);
-							// Minutes
-							var minutes = "" + (absData % 60);
-							minutes = padWithZeroes(minutes, 2);
-
-							formattedString += prefix + hours + minutes;
-							break;
-					}
-				}
-				searchString = searchString.substr(result.index + result[0].length);
-			}
-			return formattedString;
-		};
-	})();
-
-	log4javascript.SimpleDateFormat = SimpleDateFormat;
-
-	/* ---------------------------------------------------------------------- */
-	// PatternLayout
-
-	function PatternLayout(pattern) {
-		if (pattern) {
-			this.pattern = pattern;
-		} else {
-			this.pattern = PatternLayout.DEFAULT_CONVERSION_PATTERN;
-		}
-		this.customFields = [];
-	}
-
-	PatternLayout.TTCC_CONVERSION_PATTERN = "%r %p %c - %m%n";
-	PatternLayout.DEFAULT_CONVERSION_PATTERN = "%m%n";
-	PatternLayout.ISO8601_DATEFORMAT = "yyyy-MM-dd HH:mm:ss,SSS";
-	PatternLayout.DATETIME_DATEFORMAT = "dd MMM yyyy HH:mm:ss,SSS";
-	PatternLayout.ABSOLUTETIME_DATEFORMAT = "HH:mm:ss,SSS";
-
-	PatternLayout.prototype = new Layout();
-
-	PatternLayout.prototype.format = function(loggingEvent) {
-		var regex = /%(-?[0-9]+)?(\.?[0-9]+)?([acdfmMnpr%])(\{([^\}]+)\})?|([^%]+)/;
-		var formattedString = "";
-		var result;
-		var searchString = this.pattern;
-
-		// Cannot use regex global flag since it doesn't work with exec in IE5
-		while ((result = regex.exec(searchString))) {
-			var matchedString = result[0];
-			var padding = result[1];
-			var truncation = result[2];
-			var conversionCharacter = result[3];
-			var specifier = result[5];
-			var text = result[6];
-
-			// Check if the pattern matched was just normal text
-			if (text) {
-				formattedString += "" + text;
-			} else {
-				// Create a raw replacement string based on the conversion
-				// character and specifier
-				var replacement = "";
-				switch(conversionCharacter) {
-					case "a": // Array of messages
-					case "m": // Message
-						var depth = 0;
-						if (specifier) {
-							depth = parseInt(specifier, 10);
-							if (isNaN(depth)) {
-								handleError("PatternLayout.format: invalid specifier '" +
-									specifier + "' for conversion character '" + conversionCharacter +
-									"' - should be a number");
-								depth = 0;
-							}
-						}
-						var messages = (conversionCharacter === "a") ? loggingEvent.messages[0] : loggingEvent.messages;
-						for (var i = 0, len = messages.length; i < len; i++) {
-							if (i > 0 && (replacement.charAt(replacement.length - 1) !== " ")) {
-								replacement += " ";
-							}
-							if (depth === 0) {
-								replacement += messages[i];
-							} else {
-								replacement += formatObjectExpansion(messages[i], depth);
-							}
-						}
-						break;
-					case "c": // Logger name
-						var loggerName = loggingEvent.logger.name;
-						if (specifier) {
-							var precision = parseInt(specifier, 10);
-							var loggerNameBits = loggingEvent.logger.name.split(".");
-							if (precision >= loggerNameBits.length) {
-								replacement = loggerName;
-							} else {
-								replacement = loggerNameBits.slice(loggerNameBits.length - precision).join(".");
-							}
-						} else {
-							replacement = loggerName;
-						}
-						break;
-					case "d": // Date
-						var dateFormat = PatternLayout.ISO8601_DATEFORMAT;
-						if (specifier) {
-							dateFormat = specifier;
-							// Pick up special cases
-							if (dateFormat == "ISO8601") {
-								dateFormat = PatternLayout.ISO8601_DATEFORMAT;
-							} else if (dateFormat == "ABSOLUTE") {
-								dateFormat = PatternLayout.ABSOLUTETIME_DATEFORMAT;
-							} else if (dateFormat == "DATE") {
-								dateFormat = PatternLayout.DATETIME_DATEFORMAT;
-							}
-						}
-						// Format the date
-						replacement = (new SimpleDateFormat(dateFormat)).format(loggingEvent.timeStamp);
-						break;
-					case "f": // Custom field
-						if (this.hasCustomFields()) {
-							var fieldIndex = 0;
-							if (specifier) {
-								fieldIndex = parseInt(specifier, 10);
-								if (isNaN(fieldIndex)) {
-									handleError("PatternLayout.format: invalid specifier '" +
-										specifier + "' for conversion character 'f' - should be a number");
-								} else if (fieldIndex === 0) {
-									handleError("PatternLayout.format: invalid specifier '" +
-										specifier + "' for conversion character 'f' - must be greater than zero");
-								} else if (fieldIndex > this.customFields.length) {
-									handleError("PatternLayout.format: invalid specifier '" +
-										specifier + "' for conversion character 'f' - there aren't that many custom fields");
-								} else {
-									fieldIndex = fieldIndex - 1;
-								}
-							}
-                            var val = this.customFields[fieldIndex].value;
-                            if (typeof val == "function") {
-                                val = val(this, loggingEvent);
-                            }
-                            replacement = val;
-						}
-						break;
-					case "n": // New line
-						replacement = newLine;
-						break;
-					case "p": // Level
-						replacement = loggingEvent.level.name;
-						break;
-					case "r": // Milliseconds since log4javascript startup
-						replacement = "" + loggingEvent.timeStamp.getDifference(applicationStartDate);
-						break;
-					case "%": // Literal % sign
-						replacement = "%";
-						break;
-					default:
-						replacement = matchedString;
-						break;
-				}
-				// Format the replacement according to any padding or
-				// truncation specified
-				var l;
-
-				// First, truncation
-				if (truncation) {
-					l = parseInt(truncation.substr(1), 10);
-					var strLen = replacement.length;
-					if (l < strLen) {
-						replacement = replacement.substring(strLen - l, strLen);
-					}
-				}
-				// Next, padding
-				if (padding) {
-					if (padding.charAt(0) == "-") {
-						l = parseInt(padding.substr(1), 10);
-						// Right pad with spaces
-						while (replacement.length < l) {
-							replacement += " ";
-						}
-					} else {
-						l = parseInt(padding, 10);
-						// Left pad with spaces
-						while (replacement.length < l) {
-							replacement = " " + replacement;
-						}
-					}
-				}
-				formattedString += replacement;
-			}
-			searchString = searchString.substr(result.index + result[0].length);
-		}
-		return formattedString;
-	};
-
-	PatternLayout.prototype.ignoresThrowable = function() {
-	    return true;
-	};
-
-	PatternLayout.prototype.toString = function() {
-	    return "PatternLayout";
-	};
-
-	log4javascript.PatternLayout = PatternLayout;
-	/* ---------------------------------------------------------------------- */
-	// AlertAppender
-
-	function AlertAppender() {}
-
-	AlertAppender.prototype = new Appender();
-
-	AlertAppender.prototype.layout = new SimpleLayout();
-
-	AlertAppender.prototype.append = function(loggingEvent) {
-		var formattedMessage = this.getLayout().format(loggingEvent);
-		if (this.getLayout().ignoresThrowable()) {
-			formattedMessage += loggingEvent.getThrowableStrRep();
-		}
-		alert(formattedMessage);
-	};
-
-	AlertAppender.prototype.toString = function() {
-		return "AlertAppender";
-	};
-
-	log4javascript.AlertAppender = AlertAppender;
-	/* ---------------------------------------------------------------------- */
-	// BrowserConsoleAppender (only works in Opera and Safari and Firefox with
-	// Firebug extension)
-
-	function BrowserConsoleAppender() {}
-
-	BrowserConsoleAppender.prototype = new log4javascript.Appender();
-	BrowserConsoleAppender.prototype.layout = new NullLayout();
-	BrowserConsoleAppender.prototype.threshold = Level.DEBUG;
-
-	BrowserConsoleAppender.prototype.append = function(loggingEvent) {
-		var appender = this;
-
-		var getFormattedMessage = function() {
-			var layout = appender.getLayout();
-			var formattedMessage = layout.format(loggingEvent);
-			if (layout.ignoresThrowable() && loggingEvent.exception) {
-				formattedMessage += loggingEvent.getThrowableStrRep();
-			}
-			return formattedMessage;
-		};
-
-		if ((typeof opera != "undefined") && opera.postError) { // Opera
-			opera.postError(getFormattedMessage());
-		} else if (window.console && window.console.log) { // Safari and Firebug
-			var formattedMesage = getFormattedMessage();
-			// Log to Firebug using its logging methods or revert to the console.log
-			// method in Safari
-			if (window.console.debug && Level.DEBUG.isGreaterOrEqual(loggingEvent.level)) {
-				window.console.debug(formattedMesage);
-			} else if (window.console.info && Level.INFO.equals(loggingEvent.level)) {
-				window.console.info(formattedMesage);
-			} else if (window.console.warn && Level.WARN.equals(loggingEvent.level)) {
-				window.console.warn(formattedMesage);
-			} else if (window.console.error && loggingEvent.level.isGreaterOrEqual(Level.ERROR)) {
-				window.console.error(formattedMesage);
-			} else {
-				window.console.log(formattedMesage);
-			}
-		}
-	};
-
-	BrowserConsoleAppender.prototype.group = function(name) {
-		if (window.console && window.console.group) {
-			window.console.group(name);
-		}
-	};
-
-	BrowserConsoleAppender.prototype.groupEnd = function() {
-		if (window.console && window.console.groupEnd) {
-			window.console.groupEnd();
-		}
-	};
-
-	BrowserConsoleAppender.prototype.toString = function() {
-		return "BrowserConsoleAppender";
-	};
-
-	log4javascript.BrowserConsoleAppender = BrowserConsoleAppender;
-	/* ---------------------------------------------------------------------- */
-	// AjaxAppender related
-
-	var xmlHttpFactories = [
-		function() { return new XMLHttpRequest(); },
-		function() { return new ActiveXObject("Msxml2.XMLHTTP"); },
-		function() { return new ActiveXObject("Microsoft.XMLHTTP"); }
-	];
-
-	var getXmlHttp = function(errorHandler) {
-		// This is only run the first time; the value of getXmlHttp gets
-		// replaced with the factory that succeeds on the first run
-		var xmlHttp = null, factory;
-		for (var i = 0, len = xmlHttpFactories.length; i < len; i++) {
-			factory = xmlHttpFactories[i];
-			try {
-				xmlHttp = factory();
-				getXmlHttp = factory;
-				return xmlHttp;
-			} catch (e) {
-			}
-		}
-		// If we're here, all factories have failed, so throw an error
-		if (errorHandler) {
-			errorHandler();
-		} else {
-			handleError("getXmlHttp: unable to obtain XMLHttpRequest object");
-		}
-	};
-
-	function isHttpRequestSuccessful(xmlHttp) {
-		return (isUndefined(xmlHttp.status) || xmlHttp.status === 0 ||
-			(xmlHttp.status >= 200 && xmlHttp.status < 300));
-	}
-
-	/* ---------------------------------------------------------------------- */
-	// AjaxAppender
-
-	function AjaxAppender(url) {
-		var appender = this;
-		var isSupported = true;
-		if (!url) {
-			handleError("AjaxAppender: URL must be specified in constructor");
-			isSupported = false;
-		}
-
-		var timed = this.defaults.timed;
-		var waitForResponse = this.defaults.waitForResponse;
-		var batchSize = this.defaults.batchSize;
-		var timerInterval = this.defaults.timerInterval;
-		var requestSuccessCallback = this.defaults.requestSuccessCallback;
-		var failCallback = this.defaults.failCallback;
-		var postVarName = this.defaults.postVarName;
-		var sendAllOnUnload = this.defaults.sendAllOnUnload;
-		var sessionId = null;
-
-		var queuedLoggingEvents = [];
-		var queuedRequests = [];
-		var headers = [];
-		var sending = false;
-		var initialized = false;
-
-		// Configuration methods. The function scope is used to prevent
-		// direct alteration to the appender configuration properties.
-		function checkCanConfigure(configOptionName) {
-			if (initialized) {
-				handleError("AjaxAppender: configuration option '" +
-					configOptionName +
-					"' may not be set after the appender has been initialized");
-				return false;
-			}
-			return true;
-		}
-
-		this.getSessionId = function() { return sessionId; };
-		this.setSessionId = function(sessionIdParam) {
-			sessionId = extractStringFromParam(sessionIdParam, null);
-			this.layout.setCustomField("sessionid", sessionId);
-		};
-
-		this.setLayout = function(layoutParam) {
-			if (checkCanConfigure("layout")) {
-				this.layout = layoutParam;
-				// Set the session id as a custom field on the layout, if not already present
-				if (sessionId !== null) {
-					this.setSessionId(sessionId);
-				}
-			}
-		};
-
-		this.isTimed = function() { return timed; };
-		this.setTimed = function(timedParam) {
-			if (checkCanConfigure("timed")) {
-				timed = bool(timedParam);
-			}
-		};
-
-		this.getTimerInterval = function() { return timerInterval; };
-		this.setTimerInterval = function(timerIntervalParam) {
-			if (checkCanConfigure("timerInterval")) {
-				timerInterval = extractIntFromParam(timerIntervalParam, timerInterval);
-			}
-		};
-
-		this.isWaitForResponse = function() { return waitForResponse; };
-		this.setWaitForResponse = function(waitForResponseParam) {
-			if (checkCanConfigure("waitForResponse")) {
-				waitForResponse = bool(waitForResponseParam);
-			}
-		};
-
-		this.getBatchSize = function() { return batchSize; };
-		this.setBatchSize = function(batchSizeParam) {
-			if (checkCanConfigure("batchSize")) {
-				batchSize = extractIntFromParam(batchSizeParam, batchSize);
-			}
-		};
-
-		this.isSendAllOnUnload = function() { return sendAllOnUnload; };
-		this.setSendAllOnUnload = function(sendAllOnUnloadParam) {
-			if (checkCanConfigure("sendAllOnUnload")) {
-				sendAllOnUnload = extractBooleanFromParam(sendAllOnUnloadParam, sendAllOnUnload);
-			}
-		};
-
-		this.setRequestSuccessCallback = function(requestSuccessCallbackParam) {
-			requestSuccessCallback = extractFunctionFromParam(requestSuccessCallbackParam, requestSuccessCallback);
-		};
-
-		this.setFailCallback = function(failCallbackParam) {
-			failCallback = extractFunctionFromParam(failCallbackParam, failCallback);
-		};
-
-		this.getPostVarName = function() { return postVarName; };
-		this.setPostVarName = function(postVarNameParam) {
-			if (checkCanConfigure("postVarName")) {
-				postVarName = extractStringFromParam(postVarNameParam, postVarName);
-			}
-		};
-
-		this.getHeaders = function() { return headers; };
-		this.addHeader = function(name, value) {
-			headers.push( { name: name, value: value } );
-		};
-
-		// Internal functions
-		function sendAll() {
-			if (isSupported && enabled) {
-				sending = true;
-				var currentRequestBatch;
-				if (waitForResponse) {
-					// Send the first request then use this function as the callback once
-					// the response comes back
-					if (queuedRequests.length > 0) {
-						currentRequestBatch = queuedRequests.shift();
-						sendRequest(preparePostData(currentRequestBatch), sendAll);
-					} else {
-						sending = false;
-						if (timed) {
-							scheduleSending();
-						}
-					}
-				} else {
-					// Rattle off all the requests without waiting to see the response
-					while ((currentRequestBatch = queuedRequests.shift())) {
-						sendRequest(preparePostData(currentRequestBatch));
-					}
-					sending = false;
-					if (timed) {
-						scheduleSending();
-					}
-				}
-			}
-		}
-
-		this.sendAll = sendAll;
-
-		// Called when the window unloads. At this point we're past caring about
-		// waiting for responses or timers or incomplete batches - everything
-		// must go, now
-		function sendAllRemaining() {
-			var sendingAnything = false;
-			if (isSupported && enabled) {
-				// Create requests for everything left over, batched as normal
-				var actualBatchSize = appender.getLayout().allowBatching() ? batchSize : 1;
-				var currentLoggingEvent;
-				var batchedLoggingEvents = [];
-				while ((currentLoggingEvent = queuedLoggingEvents.shift())) {
-					batchedLoggingEvents.push(currentLoggingEvent);
-					if (queuedLoggingEvents.length >= actualBatchSize) {
-						// Queue this batch of log entries
-						queuedRequests.push(batchedLoggingEvents);
-						batchedLoggingEvents = [];
-					}
-				}
-				// If there's a partially completed batch, add it
-				if (batchedLoggingEvents.length > 0) {
-					queuedRequests.push(batchedLoggingEvents);
-				}
-				sendingAnything = (queuedRequests.length > 0);
-				waitForResponse = false;
-				timed = false;
-				sendAll();
-			}
-			return sendingAnything;
-		}
-
-		function preparePostData(batchedLoggingEvents) {
-			// Format the logging events
-			var formattedMessages = [];
-			var currentLoggingEvent;
-			var postData = "";
-			while ((currentLoggingEvent = batchedLoggingEvents.shift())) {
-				var currentFormattedMessage = appender.getLayout().format(currentLoggingEvent);
-				if (appender.getLayout().ignoresThrowable()) {
-					currentFormattedMessage += currentLoggingEvent.getThrowableStrRep();
-				}
-				formattedMessages.push(currentFormattedMessage);
-			}
-			// Create the post data string
-			if (batchedLoggingEvents.length == 1) {
-				postData = formattedMessages.join("");
-			} else {
-				postData = appender.getLayout().batchHeader +
-					formattedMessages.join(appender.getLayout().batchSeparator) +
-					appender.getLayout().batchFooter;
-			}
-			postData = appender.getLayout().returnsPostData ? postData :
-				urlEncode(postVarName) + "=" + urlEncode(postData);
-			// Add the layout name to the post data
-			if (postData.length > 0) {
-				postData += "&";
-			}
-			return postData + "layout=" + urlEncode(appender.getLayout().toString());
-		}
-
-		function scheduleSending() {
-			window.setTimeout(sendAll, timerInterval);
-		}
-
-		function xmlHttpErrorHandler() {
-			var msg = "AjaxAppender: could not create XMLHttpRequest object. AjaxAppender disabled";
-			handleError(msg);
-			isSupported = false;
-			if (failCallback) {
-				failCallback(msg);
-			}
-		}
-
-		function sendRequest(postData, successCallback) {
-			try {
-				var xmlHttp = getXmlHttp(xmlHttpErrorHandler);
-				if (isSupported) {
-					if (xmlHttp.overrideMimeType) {
-						xmlHttp.overrideMimeType(appender.getLayout().getContentType());
-					}
-					xmlHttp.onreadystatechange = function() {
-						if (xmlHttp.readyState == 4) {
-							if (isHttpRequestSuccessful(xmlHttp)) {
-								if (requestSuccessCallback) {
-									requestSuccessCallback(xmlHttp);
-								}
-								if (successCallback) {
-									successCallback(xmlHttp);
-								}
-							} else {
-								var msg = "AjaxAppender.append: XMLHttpRequest request to URL " +
-									url + " returned status code " + xmlHttp.status;
-								handleError(msg);
-								if (failCallback) {
-									failCallback(msg);
-								}
-							}
-							xmlHttp.onreadystatechange = emptyFunction;
-							xmlHttp = null;
-						}
-					};
-					xmlHttp.open("POST", url, true);
-					try {
-						xmlHttp.setRequestHeader("Content-Type", "application/x-www-form-urlencoded");
-						for (var i = 0, header; header = headers[i++]; ) {
-							xmlHttp.setRequestHeader(header.name, header.value);
-						}
-					} catch (headerEx) {
-						var msg = "AjaxAppender.append: your browser's XMLHttpRequest implementation" +
-							" does not support setRequestHeader, therefore cannot post data. AjaxAppender disabled";
-						handleError(msg);
-						isSupported = false;
-						if (failCallback) {
-							failCallback(msg);
-						}
-						return;
-					}
-					xmlHttp.send(postData);
-				}
-			} catch (ex) {
-				var errMsg = "AjaxAppender.append: error sending log message to " + url;
-				handleError(errMsg, ex);
-				isSupported = false;
-				if (failCallback) {
-					failCallback(errMsg + ". Details: " + getExceptionStringRep(ex));
-				}
-			}
-		}
-
-		this.append = function(loggingEvent) {
-			if (isSupported) {
-				if (!initialized) {
-					init();
-				}
-				queuedLoggingEvents.push(loggingEvent);
-				var actualBatchSize = this.getLayout().allowBatching() ? batchSize : 1;
-
-				if (queuedLoggingEvents.length >= actualBatchSize) {
-					var currentLoggingEvent;
-					var batchedLoggingEvents = [];
-					while ((currentLoggingEvent = queuedLoggingEvents.shift())) {
-						batchedLoggingEvents.push(currentLoggingEvent);
-					}
-					// Queue this batch of log entries
-					queuedRequests.push(batchedLoggingEvents);
-
-					// If using a timer, the queue of requests will be processed by the
-					// timer function, so nothing needs to be done here.
-					if (!timed && (!waitForResponse || (waitForResponse && !sending))) {
-						sendAll();
-					}
-				}
-			}
-		};
-
-		function init() {
-			initialized = true;
-			// Add unload event to send outstanding messages
-			if (sendAllOnUnload) {
-				var oldBeforeUnload = window.onbeforeunload;
-				window.onbeforeunload = function() {
-					if (oldBeforeUnload) {
-						oldBeforeUnload();
-					}
-					if (sendAllRemaining()) {
-						return "Sending log messages";
-					}
-				};
-			}
-			// Start timer
-			if (timed) {
-				scheduleSending();
-			}
-		}
-	}
-
-	AjaxAppender.prototype = new Appender();
-
-	AjaxAppender.prototype.defaults = {
-		waitForResponse: false,
-		timed: false,
-		timerInterval: 1000,
-		batchSize: 1,
-		sendAllOnUnload: false,
-		requestSuccessCallback: null,
-		failCallback: null,
-		postVarName: "data"
-	};
-
-	AjaxAppender.prototype.layout = new HttpPostDataLayout();
-
-	AjaxAppender.prototype.toString = function() {
-		return "AjaxAppender";
-	};
-
-	log4javascript.AjaxAppender = AjaxAppender;
-	/* ---------------------------------------------------------------------- */
-	// PopUpAppender and InPageAppender related
-
-	function setCookie(name, value, days, path) {
-	    var expires;
-	    path = path ? "; path=" + path : "";
-		if (days) {
-			var date = new Date();
-			date.setTime(date.getTime() + (days * 24 * 60 * 60 * 1000));
-			expires = "; expires=" + date.toGMTString();
-		} else {
-		    expires = "";
-	    }
-		document.cookie = escape(name) + "=" + escape(value) + expires + path;
-	}
-
-	function getCookie(name) {
-		var nameEquals = escape(name) + "=";
-		var ca = document.cookie.split(";");
-		for (var i = 0, len = ca.length; i < len; i++) {
-			var c = ca[i];
-			while (c.charAt(0) === " ") {
-			    c = c.substring(1, c.length);
-			}
-			if (c.indexOf(nameEquals) === 0) {
-			    return unescape(c.substring(nameEquals.length, c.length));
-	        }
-		}
-		return null;
-	}
-
-	// Gets the base URL of the location of the log4javascript script.
-	// This is far from infallible.
-	function getBaseUrl() {
-		var scripts = document.getElementsByTagName("script");
-		for (var i = 0, len = scripts.length; i < len; ++i) {
-			if (scripts[i].src.indexOf("log4javascript") != -1) {
-				var lastSlash = scripts[i].src.lastIndexOf("/");
-				return (lastSlash == -1) ? "" : scripts[i].src.substr(0, lastSlash + 1);
-			}
-		}
-        return null;
+    function ConsoleWriter() {
     }
 
-	function isLoaded(win) {
-		try {
-			return bool(win.loaded);
-		} catch (ex) {
-			return false;
-		}
-	}
-
-	/* ---------------------------------------------------------------------- */
-	// ConsoleAppender (prototype for PopUpAppender and InPageAppender)
-
-	var ConsoleAppender;
-
-	// Create an anonymous function to protect base console methods
-	(function() {
-		var getConsoleHtmlLines = function() {
-			return [
-'<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN" "http://www.w3.org/TR/xhtml1/DTD/xhtml1-strict.dtd">',
-'<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en">',
-'	<head>',
-'		<title>log4javascript</title>',
-'		<meta http-equiv="Content-Type" content="text/html; charset=utf-8" />',
-'		<!-- Make IE8 behave like IE7, having gone to all the trouble of making IE work -->',
-'		<meta http-equiv="X-UA-Compatible" content="IE=7" />',
-'		<script type="text/javascript">var isIe = false, isIePre7 = false;</script>',
-'		<!--[if IE]><script type="text/javascript">isIe = true</script><![endif]-->',
-'		<!--[if lt IE 7]><script type="text/javascript">isIePre7 = true</script><![endif]-->',
-'		<script type="text/javascript">',
-'			//<![CDATA[',
-'			var loggingEnabled = true;',
-'			var logQueuedEventsTimer = null;',
-'			var logEntries = [];',
-'			var logEntriesAndSeparators = [];',
-'			var logItems = [];',
-'			var renderDelay = 100;',
-'			var unrenderedLogItemsExist = false;',
-'			var rootGroup, currentGroup = null;',
-'			var loaded = false;',
-'			var currentLogItem = null;',
-'			var logMainContainer;',
-'',
-'			function copyProperties(obj, props) {',
-'				for (var i in props) {',
-'					obj[i] = props[i];',
-'				}',
-'			}',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogItem() {',
-'			}',
-'',
-'			LogItem.prototype = {',
-'				mainContainer: null,',
-'				wrappedContainer: null,',
-'				unwrappedContainer: null,',
-'				group: null,',
-'',
-'				appendToLog: function() {',
-'					for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'						this.elementContainers[i].appendToLog();',
-'					}',
-'					this.group.update();',
-'				},',
-'',
-'				doRemove: function(doUpdate, removeFromGroup) {',
-'					if (this.rendered) {',
-'						for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'							this.elementContainers[i].remove();',
-'						}',
-'						this.unwrappedElementContainer = null;',
-'						this.wrappedElementContainer = null;',
-'						this.mainElementContainer = null;',
-'					}',
-'					if (this.group && removeFromGroup) {',
-'						this.group.removeChild(this, doUpdate);',
-'					}',
-'					if (this === currentLogItem) {',
-'						currentLogItem = null;',
-'					}',
-'				},',
-'',
-'				remove: function(doUpdate, removeFromGroup) {',
-'					this.doRemove(doUpdate, removeFromGroup);',
-'				},',
-'',
-'				render: function() {},',
-'',
-'				accept: function(visitor) {',
-'					visitor.visit(this);',
-'				},',
-'',
-'				getUnwrappedDomContainer: function() {',
-'					return this.group.unwrappedElementContainer.contentDiv;',
-'				},',
-'',
-'				getWrappedDomContainer: function() {',
-'					return this.group.wrappedElementContainer.contentDiv;',
-'				},',
-'',
-'				getMainDomContainer: function() {',
-'					return this.group.mainElementContainer.contentDiv;',
-'				}',
-'			};',
-'',
-'			LogItem.serializedItemKeys = {LOG_ENTRY: 0, GROUP_START: 1, GROUP_END: 2};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogItemContainerElement() {',
-'			}',
-'',
-'			LogItemContainerElement.prototype = {',
-'				appendToLog: function() {',
-'					var insertBeforeFirst = (newestAtTop && this.containerDomNode.hasChildNodes());',
-'					if (insertBeforeFirst) {',
-'						this.containerDomNode.insertBefore(this.mainDiv, this.containerDomNode.firstChild);',
-'					} else {',
-'						this.containerDomNode.appendChild(this.mainDiv);',
-'					}',
-'				}',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function SeparatorElementContainer(containerDomNode) {',
-'				this.containerDomNode = containerDomNode;',
-'				this.mainDiv = document.createElement("div");',
-'				this.mainDiv.className = "separator";',
-'				this.mainDiv.innerHTML = "&nbsp;";',
-'			}',
-'',
-'			SeparatorElementContainer.prototype = new LogItemContainerElement();',
-'',
-'			SeparatorElementContainer.prototype.remove = function() {',
-'				this.mainDiv.parentNode.removeChild(this.mainDiv);',
-'				this.mainDiv = null;',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function Separator() {',
-'				this.rendered = false;',
-'			}',
-'',
-'			Separator.prototype = new LogItem();',
-'',
-'			copyProperties(Separator.prototype, {',
-'				render: function() {',
-'					var containerDomNode = this.group.contentDiv;',
-'					if (isIe) {',
-'						this.unwrappedElementContainer = new SeparatorElementContainer(this.getUnwrappedDomContainer());',
-'						this.wrappedElementContainer = new SeparatorElementContainer(this.getWrappedDomContainer());',
-'						this.elementContainers = [this.unwrappedElementContainer, this.wrappedElementContainer];',
-'					} else {',
-'						this.mainElementContainer = new SeparatorElementContainer(this.getMainDomContainer());',
-'						this.elementContainers = [this.mainElementContainer];',
-'					}',
-'					this.content = this.formattedMessage;',
-'					this.rendered = true;',
-'				}',
-'			});',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function GroupElementContainer(group, containerDomNode, isRoot, isWrapped) {',
-'				this.group = group;',
-'				this.containerDomNode = containerDomNode;',
-'				this.isRoot = isRoot;',
-'				this.isWrapped = isWrapped;',
-'				this.expandable = false;',
-'',
-'				if (this.isRoot) {',
-'					if (isIe) {',
-'						this.contentDiv = logMainContainer.appendChild(document.createElement("div"));',
-'						this.contentDiv.id = this.isWrapped ? "log_wrapped" : "log_unwrapped";',
-'					} else {',
-'						this.contentDiv = logMainContainer;',
-'					}',
-'				} else {',
-'					var groupElementContainer = this;',
-'					',
-'					this.mainDiv = document.createElement("div");',
-'					this.mainDiv.className = "group";',
-'',
-'					this.headingDiv = this.mainDiv.appendChild(document.createElement("div"));',
-'					this.headingDiv.className = "groupheading";',
-'',
-'					this.expander = this.headingDiv.appendChild(document.createElement("span"));',
-'					this.expander.className = "expander unselectable greyedout";',
-'					this.expander.unselectable = true;',
-'					var expanderText = this.group.expanded ? "-" : "+";',
-'					this.expanderTextNode = this.expander.appendChild(document.createTextNode(expanderText));',
-'					',
-'					this.headingDiv.appendChild(document.createTextNode(" " + this.group.name));',
-'',
-'					this.contentDiv = this.mainDiv.appendChild(document.createElement("div"));',
-'					var contentCssClass = this.group.expanded ? "expanded" : "collapsed";',
-'					this.contentDiv.className = "groupcontent " + contentCssClass;',
-'',
-'					this.expander.onclick = function() {',
-'						if (groupElementContainer.group.expandable) {',
-'							groupElementContainer.group.toggleExpanded();',
-'						}',
-'					};',
-'				}',
-'			}',
-'',
-'			GroupElementContainer.prototype = new LogItemContainerElement();',
-'',
-'			copyProperties(GroupElementContainer.prototype, {',
-'				toggleExpanded: function() {',
-'					if (!this.isRoot) {',
-'						var oldCssClass, newCssClass, expanderText;',
-'						if (this.group.expanded) {',
-'							newCssClass = "expanded";',
-'							oldCssClass = "collapsed";',
-'							expanderText = "-";',
-'						} else {',
-'							newCssClass = "collapsed";',
-'							oldCssClass = "expanded";',
-'							expanderText = "+";',
-'						}',
-'						replaceClass(this.contentDiv, newCssClass, oldCssClass);',
-'						this.expanderTextNode.nodeValue = expanderText;',
-'					}',
-'				},',
-'',
-'				remove: function() {',
-'					if (!this.isRoot) {',
-'						this.headingDiv = null;',
-'						this.expander.onclick = null;',
-'						this.expander = null;',
-'						this.expanderTextNode = null;',
-'						this.contentDiv = null;',
-'						this.containerDomNode = null;',
-'						this.mainDiv.parentNode.removeChild(this.mainDiv);',
-'						this.mainDiv = null;',
-'					}',
-'				},',
-'',
-'				reverseChildren: function() {',
-'					// Invert the order of the log entries',
-'					var node = null;',
-'',
-'					// Remove all the log container nodes',
-'					var childDomNodes = [];',
-'					while ((node = this.contentDiv.firstChild)) {',
-'						this.contentDiv.removeChild(node);',
-'						childDomNodes.push(node);',
-'					}',
-'',
-'					// Put them all back in reverse order',
-'					while ((node = childDomNodes.pop())) {',
-'						this.contentDiv.appendChild(node);',
-'					}',
-'				},',
-'',
-'				update: function() {',
-'					if (!this.isRoot) {',
-'						if (this.group.expandable) {',
-'							removeClass(this.expander, "greyedout");',
-'						} else {',
-'							addClass(this.expander, "greyedout");',
-'						}',
-'					}',
-'				},',
-'',
-'				clear: function() {',
-'					if (this.isRoot) {',
-'						this.contentDiv.innerHTML = "";',
-'					}',
-'				}',
-'			});',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function Group(name, isRoot, initiallyExpanded) {',
-'				this.name = name;',
-'				this.group = null;',
-'				this.isRoot = isRoot;',
-'				this.initiallyExpanded = initiallyExpanded;',
-'				this.elementContainers = [];',
-'				this.children = [];',
-'				this.expanded = initiallyExpanded;',
-'				this.rendered = false;',
-'				this.expandable = false;',
-'			}',
-'',
-'			Group.prototype = new LogItem();',
-'',
-'			copyProperties(Group.prototype, {',
-'				addChild: function(logItem) {',
-'					this.children.push(logItem);',
-'					logItem.group = this;',
-'				},',
-'',
-'				render: function() {',
-'					if (isIe) {',
-'						var unwrappedDomContainer, wrappedDomContainer;',
-'						if (this.isRoot) {',
-'							unwrappedDomContainer = logMainContainer;',
-'							wrappedDomContainer = logMainContainer;',
-'						} else {',
-'							unwrappedDomContainer = this.getUnwrappedDomContainer();',
-'							wrappedDomContainer = this.getWrappedDomContainer();',
-'						}',
-'						this.unwrappedElementContainer = new GroupElementContainer(this, unwrappedDomContainer, this.isRoot, false);',
-'						this.wrappedElementContainer = new GroupElementContainer(this, wrappedDomContainer, this.isRoot, true);',
-'						this.elementContainers = [this.unwrappedElementContainer, this.wrappedElementContainer];',
-'					} else {',
-'						var mainDomContainer = this.isRoot ? logMainContainer : this.getMainDomContainer();',
-'						this.mainElementContainer = new GroupElementContainer(this, mainDomContainer, this.isRoot, false);',
-'						this.elementContainers = [this.mainElementContainer];',
-'					}',
-'					this.rendered = true;',
-'				},',
-'',
-'				toggleExpanded: function() {',
-'					this.expanded = !this.expanded;',
-'					for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'						this.elementContainers[i].toggleExpanded();',
-'					}',
-'				},',
-'',
-'				expand: function() {',
-'					if (!this.expanded) {',
-'						this.toggleExpanded();',
-'					}',
-'				},',
-'',
-'				accept: function(visitor) {',
-'					visitor.visitGroup(this);',
-'				},',
-'',
-'				reverseChildren: function() {',
-'					if (this.rendered) {',
-'						for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'							this.elementContainers[i].reverseChildren();',
-'						}',
-'					}',
-'				},',
-'',
-'				update: function() {',
-'					var previouslyExpandable = this.expandable;',
-'					this.expandable = (this.children.length !== 0);',
-'					if (this.expandable !== previouslyExpandable) {',
-'						for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'							this.elementContainers[i].update();',
-'						}',
-'					}',
-'				},',
-'',
-'				flatten: function() {',
-'					var visitor = new GroupFlattener();',
-'					this.accept(visitor);',
-'					return visitor.logEntriesAndSeparators;',
-'				},',
-'',
-'				removeChild: function(child, doUpdate) {',
-'					array_remove(this.children, child);',
-'					child.group = null;',
-'					if (doUpdate) {',
-'						this.update();',
-'					}',
-'				},',
-'',
-'				remove: function(doUpdate, removeFromGroup) {',
-'					for (var i = 0, len = this.children.length; i < len; i++) {',
-'						this.children[i].remove(false, false);',
-'					}',
-'					this.children = [];',
-'					this.update();',
-'					if (this === currentGroup) {',
-'						currentGroup = this.group;',
-'					}',
-'					this.doRemove(doUpdate, removeFromGroup);',
-'				},',
-'',
-'				serialize: function(items) {',
-'					items.push([LogItem.serializedItemKeys.GROUP_START, this.name]);',
-'					for (var i = 0, len = this.children.length; i < len; i++) {',
-'						this.children[i].serialize(items);',
-'					}',
-'					if (this !== currentGroup) {',
-'						items.push([LogItem.serializedItemKeys.GROUP_END]);',
-'					}',
-'				},',
-'',
-'				clear: function() {',
-'					for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'						this.elementContainers[i].clear();',
-'					}',
-'				}',
-'			});',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogEntryElementContainer() {',
-'			}',
-'',
-'			LogEntryElementContainer.prototype = new LogItemContainerElement();',
-'',
-'			copyProperties(LogEntryElementContainer.prototype, {',
-'				remove: function() {',
-'					this.doRemove();',
-'				},',
-'',
-'				doRemove: function() {',
-'					this.mainDiv.parentNode.removeChild(this.mainDiv);',
-'					this.mainDiv = null;',
-'					this.contentElement = null;',
-'					this.containerDomNode = null;',
-'				},',
-'',
-'				setContent: function(content, wrappedContent) {',
-'					if (content === this.formattedMessage) {',
-'						this.contentElement.innerHTML = "";',
-'						this.contentElement.appendChild(document.createTextNode(this.formattedMessage));',
-'					} else {',
-'						this.contentElement.innerHTML = content;',
-'					}',
-'				},',
-'',
-'				setSearchMatch: function(isMatch) {',
-'					var oldCssClass = isMatch ? "searchnonmatch" : "searchmatch";',
-'					var newCssClass = isMatch ? "searchmatch" : "searchnonmatch";',
-'					replaceClass(this.mainDiv, newCssClass, oldCssClass);',
-'				},',
-'',
-'				clearSearch: function() {',
-'					removeClass(this.mainDiv, "searchmatch");',
-'					removeClass(this.mainDiv, "searchnonmatch");',
-'				}',
-'			});',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogEntryWrappedElementContainer(logEntry, containerDomNode) {',
-'				this.logEntry = logEntry;',
-'				this.containerDomNode = containerDomNode;',
-'				this.mainDiv = document.createElement("div");',
-'				this.mainDiv.appendChild(document.createTextNode(this.logEntry.formattedMessage));',
-'				this.mainDiv.className = "logentry wrapped " + this.logEntry.level;',
-'				this.contentElement = this.mainDiv;',
-'			}',
-'',
-'			LogEntryWrappedElementContainer.prototype = new LogEntryElementContainer();',
-'',
-'			LogEntryWrappedElementContainer.prototype.setContent = function(content, wrappedContent) {',
-'				if (content === this.formattedMessage) {',
-'					this.contentElement.innerHTML = "";',
-'					this.contentElement.appendChild(document.createTextNode(this.formattedMessage));',
-'				} else {',
-'					this.contentElement.innerHTML = wrappedContent;',
-'				}',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogEntryUnwrappedElementContainer(logEntry, containerDomNode) {',
-'				this.logEntry = logEntry;',
-'				this.containerDomNode = containerDomNode;',
-'				this.mainDiv = document.createElement("div");',
-'				this.mainDiv.className = "logentry unwrapped " + this.logEntry.level;',
-'				this.pre = this.mainDiv.appendChild(document.createElement("pre"));',
-'				this.pre.appendChild(document.createTextNode(this.logEntry.formattedMessage));',
-'				this.pre.className = "unwrapped";',
-'				this.contentElement = this.pre;',
-'			}',
-'',
-'			LogEntryUnwrappedElementContainer.prototype = new LogEntryElementContainer();',
-'',
-'			LogEntryUnwrappedElementContainer.prototype.remove = function() {',
-'				this.doRemove();',
-'				this.pre = null;',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogEntryMainElementContainer(logEntry, containerDomNode) {',
-'				this.logEntry = logEntry;',
-'				this.containerDomNode = containerDomNode;',
-'				this.mainDiv = document.createElement("div");',
-'				this.mainDiv.className = "logentry nonielogentry " + this.logEntry.level;',
-'				this.contentElement = this.mainDiv.appendChild(document.createElement("span"));',
-'				this.contentElement.appendChild(document.createTextNode(this.logEntry.formattedMessage));',
-'			}',
-'',
-'			LogEntryMainElementContainer.prototype = new LogEntryElementContainer();',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogEntry(level, formattedMessage) {',
-'				this.level = level;',
-'				this.formattedMessage = formattedMessage;',
-'				this.rendered = false;',
-'			}',
-'',
-'			LogEntry.prototype = new LogItem();',
-'',
-'			copyProperties(LogEntry.prototype, {',
-'				render: function() {',
-'					var logEntry = this;',
-'					var containerDomNode = this.group.contentDiv;',
-'',
-'					// Support for the CSS attribute white-space in IE for Windows is',
-'					// non-existent pre version 6 and slightly odd in 6, so instead',
-'					// use two different HTML elements',
-'					if (isIe) {',
-'						this.formattedMessage = this.formattedMessage.replace(/\\r\\n/g, "\\r"); // Workaround for IE\'s treatment of white space',
-'						this.unwrappedElementContainer = new LogEntryUnwrappedElementContainer(this, this.getUnwrappedDomContainer());',
-'						this.wrappedElementContainer = new LogEntryWrappedElementContainer(this, this.getWrappedDomContainer());',
-'						this.elementContainers = [this.unwrappedElementContainer, this.wrappedElementContainer];',
-'					} else {',
-'						this.mainElementContainer = new LogEntryMainElementContainer(this, this.getMainDomContainer());',
-'						this.elementContainers = [this.mainElementContainer];',
-'					}',
-'					this.content = this.formattedMessage;',
-'					this.rendered = true;',
-'				},',
-'',
-'				setContent: function(content, wrappedContent) {',
-'					if (content != this.content) {',
-'						if (isIe && (content !== this.formattedMessage)) {',
-'							content = content.replace(/\\r\\n/g, "\\r"); // Workaround for IE\'s treatment of white space',
-'						}',
-'						for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'							this.elementContainers[i].setContent(content, wrappedContent);',
-'						}',
-'						this.content = content;',
-'					}',
-'				},',
-'',
-'				getSearchMatches: function() {',
-'					var matches = [];',
-'					var i, len;',
-'					if (isIe) {',
-'						var unwrappedEls = getElementsByClass(this.unwrappedElementContainer.mainDiv, "searchterm", "span");',
-'						var wrappedEls = getElementsByClass(this.wrappedElementContainer.mainDiv, "searchterm", "span");',
-'						for (i = 0, len = unwrappedEls.length; i < len; i++) {',
-'							matches[i] = new Match(this.level, null, unwrappedEls[i], wrappedEls[i]);',
-'						}',
-'					} else {',
-'						var els = getElementsByClass(this.mainElementContainer.mainDiv, "searchterm", "span");',
-'						for (i = 0, len = els.length; i < len; i++) {',
-'							matches[i] = new Match(this.level, els[i]);',
-'						}',
-'					}',
-'					return matches;',
-'				},',
-'',
-'				setSearchMatch: function(isMatch) {',
-'					for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'						this.elementContainers[i].setSearchMatch(isMatch);',
-'					}',
-'				},',
-'',
-'				clearSearch: function() {',
-'					for (var i = 0, len = this.elementContainers.length; i < len; i++) {',
-'						this.elementContainers[i].clearSearch();',
-'					}',
-'				},',
-'',
-'				accept: function(visitor) {',
-'					visitor.visitLogEntry(this);',
-'				},',
-'',
-'				serialize: function(items) {',
-'					items.push([LogItem.serializedItemKeys.LOG_ENTRY, this.level, this.formattedMessage]);',
-'				}',
-'			});',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogItemVisitor() {',
-'			}',
-'',
-'			LogItemVisitor.prototype = {',
-'				visit: function(logItem) {',
-'				},',
-'',
-'				visitParent: function(logItem) {',
-'					if (logItem.group) {',
-'						logItem.group.accept(this);',
-'					}',
-'				},',
-'',
-'				visitChildren: function(logItem) {',
-'					for (var i = 0, len = logItem.children.length; i < len; i++) {',
-'						logItem.children[i].accept(this);',
-'					}',
-'				},',
-'',
-'				visitLogEntry: function(logEntry) {',
-'					this.visit(logEntry);',
-'				},',
-'',
-'				visitSeparator: function(separator) {',
-'					this.visit(separator);',
-'				},',
-'',
-'				visitGroup: function(group) {',
-'					this.visit(group);',
-'				}',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function GroupFlattener() {',
-'				this.logEntriesAndSeparators = [];',
-'			}',
-'',
-'			GroupFlattener.prototype = new LogItemVisitor();',
-'',
-'			GroupFlattener.prototype.visitGroup = function(group) {',
-'				this.visitChildren(group);',
-'			};',
-'',
-'			GroupFlattener.prototype.visitLogEntry = function(logEntry) {',
-'				this.logEntriesAndSeparators.push(logEntry);',
-'			};',
-'',
-'			GroupFlattener.prototype.visitSeparator = function(separator) {',
-'				this.logEntriesAndSeparators.push(separator);',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			window.onload = function() {',
-'				// Sort out document.domain',
-'				if (location.search) {',
-'					var queryBits = unescape(location.search).substr(1).split("&"), nameValueBits;',
-'					for (var i = 0, len = queryBits.length; i < len; i++) {',
-'						nameValueBits = queryBits[i].split("=");',
-'						if (nameValueBits[0] == "log4javascript_domain") {',
-'							document.domain = nameValueBits[1];',
-'							break;',
-'						}',
-'					}',
-'				}',
-'',
-'				// Create DOM objects',
-'				logMainContainer = $("log");',
-'				if (isIePre7) {',
-'					addClass(logMainContainer, "oldIe");',
-'				}',
-'',
-'				rootGroup = new Group("root", true);',
-'				rootGroup.render();',
-'				currentGroup = rootGroup;',
-'				',
-'				setCommandInputWidth();',
-'				setLogContainerHeight();',
-'				toggleLoggingEnabled();',
-'				toggleSearchEnabled();',
-'				toggleSearchFilter();',
-'				toggleSearchHighlight();',
-'				applyFilters();',
-'				checkAllLevels();',
-'				toggleWrap();',
-'				toggleNewestAtTop();',
-'				toggleScrollToLatest();',
-'				renderQueuedLogItems();',
-'				loaded = true;',
-'				$("command").value = "";',
-'				$("command").autocomplete = "off";',
-'				$("command").onkeydown = function(evt) {',
-'					evt = getEvent(evt);',
-'					if (evt.keyCode == 10 || evt.keyCode == 13) { // Return/Enter',
-'						evalCommandLine();',
-'						stopPropagation(evt);',
-'					} else if (evt.keyCode == 27) { // Escape',
-'						this.value = "";',
-'						this.focus();',
-'					} else if (evt.keyCode == 38 && commandHistory.length > 0) { // Up',
-'						currentCommandIndex = Math.max(0, currentCommandIndex - 1);',
-'						this.value = commandHistory[currentCommandIndex];',
-'						moveCaretToEnd(this);',
-'					} else if (evt.keyCode == 40 && commandHistory.length > 0) { // Down',
-'						currentCommandIndex = Math.min(commandHistory.length - 1, currentCommandIndex + 1);',
-'						this.value = commandHistory[currentCommandIndex];',
-'						moveCaretToEnd(this);',
-'					}',
-'				};',
-'',
-'				// Prevent the keypress moving the caret in Firefox',
-'				$("command").onkeypress = function(evt) {',
-'					evt = getEvent(evt);',
-'					if (evt.keyCode == 38 && commandHistory.length > 0 && evt.preventDefault) { // Up',
-'						evt.preventDefault();',
-'					}',
-'				};',
-'',
-'				// Prevent the keyup event blurring the input in Opera',
-'				$("command").onkeyup = function(evt) {',
-'					evt = getEvent(evt);',
-'					if (evt.keyCode == 27 && evt.preventDefault) { // Up',
-'						evt.preventDefault();',
-'						this.focus();',
-'					}',
-'				};',
-'',
-'				// Add document keyboard shortcuts',
-'				document.onkeydown = function keyEventHandler(evt) {',
-'					evt = getEvent(evt);',
-'					switch (evt.keyCode) {',
-'						case 69: // Ctrl + shift + E: re-execute last command',
-'							if (evt.shiftKey && (evt.ctrlKey || evt.metaKey)) {',
-'								evalLastCommand();',
-'								cancelKeyEvent(evt);',
-'								return false;',
-'							}',
-'							break;',
-'						case 75: // Ctrl + shift + K: focus search',
-'							if (evt.shiftKey && (evt.ctrlKey || evt.metaKey)) {',
-'								focusSearch();',
-'								cancelKeyEvent(evt);',
-'								return false;',
-'							}',
-'							break;',
-'						case 40: // Ctrl + shift + down arrow: focus command line',
-'						case 76: // Ctrl + shift + L: focus command line',
-'							if (evt.shiftKey && (evt.ctrlKey || evt.metaKey)) {',
-'								focusCommandLine();',
-'								cancelKeyEvent(evt);',
-'								return false;',
-'							}',
-'							break;',
-'					}',
-'				};',
-'',
-'				// Workaround to make sure log div starts at the correct size',
-'				setTimeout(setLogContainerHeight, 20);',
-'',
-'				setShowCommandLine(showCommandLine);',
-'				doSearch();',
-'			};',
-'',
-'			window.onunload = function() {',
-'				if (mainWindowExists()) {',
-'					appender.unload();',
-'				}',
-'				appender = null;',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function toggleLoggingEnabled() {',
-'				setLoggingEnabled($("enableLogging").checked);',
-'			}',
-'',
-'			function setLoggingEnabled(enable) {',
-'				loggingEnabled = enable;',
-'			}',
-'',
-'			var appender = null;',
-'',
-'			function setAppender(appenderParam) {',
-'				appender = appenderParam;',
-'			}',
-'',
-'			function setShowCloseButton(showCloseButton) {',
-'				$("closeButton").style.display = showCloseButton ? "inline" : "none";',
-'			}',
-'',
-'			function setShowHideButton(showHideButton) {',
-'				$("hideButton").style.display = showHideButton ? "inline" : "none";',
-'			}',
-'',
-'			var newestAtTop = false;',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function LogItemContentReverser() {',
-'			}',
-'			',
-'			LogItemContentReverser.prototype = new LogItemVisitor();',
-'			',
-'			LogItemContentReverser.prototype.visitGroup = function(group) {',
-'				group.reverseChildren();',
-'				this.visitChildren(group);',
-'			};',
-'',
-'			/*----------------------------------------------------------------*/',
-'',
-'			function setNewestAtTop(isNewestAtTop) {',
-'				var oldNewestAtTop = newestAtTop;',
-'				var i, iLen, j, jLen;',
-'				newestAtTop = Boolean(isNewestAtTop);',
-'				if (oldNewestAtTop != newestAtTop) {',
-'					var visitor = new LogItemContentReverser();',
-'					rootGroup.accept(visitor);',
-'',
-'					// Reassemble the matches array',
-'					if (currentSearch) {',
-'						var currentMatch = currentSearch.matches[currentMatchIndex];',
-'						var matchIndex = 0;',
-'						var matches = [];',
-'						var actOnLogEntry = function(logEntry) {',
-'							var logEntryMatches = logEntry.getSearchMatches();',
-'							for (j = 0, jLen = logEntryMatches.length; j < jLen; j++) {',
-'								matches[matchIndex] = logEntryMatches[j];',
-'								if (currentMatch && logEntryMatches[j].equals(currentMatch)) {',
-'									currentMatchIndex = matchIndex;',
-'								}',
-'								matchIndex++;',
-'							}',
-'						};',
-'						if (newestAtTop) {',
-'							for (i = logEntries.length - 1; i >= 0; i--) {',
-'								actOnLogEntry(logEntries[i]);',
-'							}',
-'						} else {',
-'							for (i = 0, iLen = logEntries.length; i < iLen; i++) {',
-'								actOnLogEntry(logEntries[i]);',
-'							}',
-'						}',
-'						currentSearch.matches = matches;',
-'						if (currentMatch) {',
-'							currentMatch.setCurrent();',
-'						}',
-'					} else if (scrollToLatest) {',
-'						doScrollToLatest();',
-'					}',
-'				}',
-'				$("newestAtTop").checked = isNewestAtTop;',
-'			}',
-'',
-'			function toggleNewestAtTop() {',
-'				var isNewestAtTop = $("newestAtTop").checked;',
-'				setNewestAtTop(isNewestAtTop);',
-'			}',
-'',
-'			var scrollToLatest = true;',
-'',
-'			function setScrollToLatest(isScrollToLatest) {',
-'				scrollToLatest = isScrollToLatest;',
-'				if (scrollToLatest) {',
-'					doScrollToLatest();',
-'				}',
-'				$("scrollToLatest").checked = isScrollToLatest;',
-'			}',
-'',
-'			function toggleScrollToLatest() {',
-'				var isScrollToLatest = $("scrollToLatest").checked;',
-'				setScrollToLatest(isScrollToLatest);',
-'			}',
-'',
-'			function doScrollToLatest() {',
-'				var l = logMainContainer;',
-'				if (typeof l.scrollTop != "undefined") {',
-'					if (newestAtTop) {',
-'						l.scrollTop = 0;',
-'					} else {',
-'						var latestLogEntry = l.lastChild;',
-'						if (latestLogEntry) {',
-'							l.scrollTop = l.scrollHeight;',
-'						}',
-'					}',
-'				}',
-'			}',
-'',
-'			var closeIfOpenerCloses = true;',
-'',
-'			function setCloseIfOpenerCloses(isCloseIfOpenerCloses) {',
-'				closeIfOpenerCloses = isCloseIfOpenerCloses;',
-'			}',
-'',
-'			var maxMessages = null;',
-'',
-'			function setMaxMessages(max) {',
-'				maxMessages = max;',
-'				pruneLogEntries();',
-'			}',
-'',
-'			var showCommandLine = false;',
-'',
-'			function setShowCommandLine(isShowCommandLine) {',
-'				showCommandLine = isShowCommandLine;',
-'				if (loaded) {',
-'					$("commandLine").style.display = showCommandLine ? "block" : "none";',
-'					setCommandInputWidth();',
-'					setLogContainerHeight();',
-'				}',
-'			}',
-'',
-'			function focusCommandLine() {',
-'				if (loaded) {',
-'					$("command").focus();',
-'				}',
-'			}',
-'',
-'			function focusSearch() {',
-'				if (loaded) {',
-'					$("searchBox").focus();',
-'				}',
-'			}',
-'',
-'			function getLogItems() {',
-'				var items = [];',
-'				for (var i = 0, len = logItems.length; i < len; i++) {',
-'					logItems[i].serialize(items);',
-'				}',
-'				return items;',
-'			}',
-'',
-'			function setLogItems(items) {',
-'				var loggingReallyEnabled = loggingEnabled;',
-'				// Temporarily turn logging on',
-'				loggingEnabled = true;',
-'				for (var i = 0, len = items.length; i < len; i++) {',
-'					switch (items[i][0]) {',
-'						case LogItem.serializedItemKeys.LOG_ENTRY:',
-'							log(items[i][1], items[i][2]);',
-'							break;',
-'						case LogItem.serializedItemKeys.GROUP_START:',
-'							group(items[i][1]);',
-'							break;',
-'						case LogItem.serializedItemKeys.GROUP_END:',
-'							groupEnd();',
-'							break;',
-'					}',
-'				}',
-'				loggingEnabled = loggingReallyEnabled;',
-'			}',
-'',
-'			function log(logLevel, formattedMessage) {',
-'				if (loggingEnabled) {',
-'					var logEntry = new LogEntry(logLevel, formattedMessage);',
-'					logEntries.push(logEntry);',
-'					logEntriesAndSeparators.push(logEntry);',
-'					logItems.push(logEntry);',
-'					currentGroup.addChild(logEntry);',
-'					if (loaded) {',
-'						if (logQueuedEventsTimer !== null) {',
-'							clearTimeout(logQueuedEventsTimer);',
-'						}',
-'						logQueuedEventsTimer = setTimeout(renderQueuedLogItems, renderDelay);',
-'						unrenderedLogItemsExist = true;',
-'					}',
-'				}',
-'			}',
-'',
-'			function renderQueuedLogItems() {',
-'				logQueuedEventsTimer = null;',
-'				var pruned = pruneLogEntries();',
-'',
-'				// Render any unrendered log entries and apply the current search to them',
-'				var initiallyHasMatches = currentSearch ? currentSearch.hasMatches() : false;',
-'				for (var i = 0, len = logItems.length; i < len; i++) {',
-'					if (!logItems[i].rendered) {',
-'						logItems[i].render();',
-'						logItems[i].appendToLog();',
-'						if (currentSearch && (logItems[i] instanceof LogEntry)) {',
-'							currentSearch.applyTo(logItems[i]);',
-'						}',
-'					}',
-'				}',
-'				if (currentSearch) {',
-'					if (pruned) {',
-'						if (currentSearch.hasVisibleMatches()) {',
-'							if (currentMatchIndex === null) {',
-'								setCurrentMatchIndex(0);',
-'							}',
-'							displayMatches();',
-'						} else {',
-'							displayNoMatches();',
-'						}',
-'					} else if (!initiallyHasMatches && currentSearch.hasVisibleMatches()) {',
-'						setCurrentMatchIndex(0);',
-'						displayMatches();',
-'					}',
-'				}',
-'				if (scrollToLatest) {',
-'					doScrollToLatest();',
-'				}',
-'				unrenderedLogItemsExist = false;',
-'			}',
-'',
-'			function pruneLogEntries() {',
-'				if ((maxMessages !== null) && (logEntriesAndSeparators.length > maxMessages)) {',
-'					var numberToDelete = logEntriesAndSeparators.length - maxMessages;',
-'					var prunedLogEntries = logEntriesAndSeparators.slice(0, numberToDelete);',
-'					if (currentSearch) {',
-'						currentSearch.removeMatches(prunedLogEntries);',
-'					}',
-'					var group;',
-'					for (var i = 0; i < numberToDelete; i++) {',
-'						group = logEntriesAndSeparators[i].group;',
-'						array_remove(logItems, logEntriesAndSeparators[i]);',
-'						array_remove(logEntries, logEntriesAndSeparators[i]);',
-'						logEntriesAndSeparators[i].remove(true, true);',
-'						if (group.children.length === 0 && group !== currentGroup && group !== rootGroup) {',
-'							array_remove(logItems, group);',
-'							group.remove(true, true);',
-'						}',
-'					}',
-'					logEntriesAndSeparators = array_removeFromStart(logEntriesAndSeparators, numberToDelete);',
-'					return true;',
-'				}',
-'				return false;',
-'			}',
-'',
-'			function group(name, startExpanded) {',
-'				if (loggingEnabled) {',
-'					initiallyExpanded = (typeof startExpanded === "undefined") ? true : Boolean(startExpanded);',
-'					var newGroup = new Group(name, false, initiallyExpanded);',
-'					currentGroup.addChild(newGroup);',
-'					currentGroup = newGroup;',
-'					logItems.push(newGroup);',
-'					if (loaded) {',
-'						if (logQueuedEventsTimer !== null) {',
-'							clearTimeout(logQueuedEventsTimer);',
-'						}',
-'						logQueuedEventsTimer = setTimeout(renderQueuedLogItems, renderDelay);',
-'						unrenderedLogItemsExist = true;',
-'					}',
-'				}',
-'			}',
-'',
-'			function groupEnd() {',
-'				currentGroup = (currentGroup === rootGroup) ? rootGroup : currentGroup.group;',
-'			}',
-'',
-'			function mainPageReloaded() {',
-'				currentGroup = rootGroup;',
-'				var separator = new Separator();',
-'				logEntriesAndSeparators.push(separator);',
-'				logItems.push(separator);',
-'				currentGroup.addChild(separator);',
-'			}',
-'',
-'			function closeWindow() {',
-'				if (appender && mainWindowExists()) {',
-'					appender.close(true);',
-'				} else {',
-'					window.close();',
-'				}',
-'			}',
-'',
-'			function hide() {',
-'				if (appender && mainWindowExists()) {',
-'					appender.hide();',
-'				}',
-'			}',
-'',
-'			var mainWindow = window;',
-'			var windowId = "log4javascriptConsoleWindow_" + new Date().getTime() + "_" + ("" + Math.random()).substr(2);',
-'',
-'			function setMainWindow(win) {',
-'				mainWindow = win;',
-'				mainWindow[windowId] = window;',
-'				// If this is a pop-up, poll the opener to see if it\'s closed',
-'				if (opener && closeIfOpenerCloses) {',
-'					pollOpener();',
-'				}',
-'			}',
-'',
-'			function pollOpener() {',
-'				if (closeIfOpenerCloses) {',
-'					if (mainWindowExists()) {',
-'						setTimeout(pollOpener, 500);',
-'					} else {',
-'						closeWindow();',
-'					}',
-'				}',
-'			}',
-'',
-'			function mainWindowExists() {',
-'				try {',
-'					return (mainWindow && !mainWindow.closed &&',
-'						mainWindow[windowId] == window);',
-'				} catch (ex) {}',
-'				return false;',
-'			}',
-'',
-'			var logLevels = ["TRACE", "DEBUG", "INFO", "WARN", "ERROR", "FATAL"];',
-'',
-'			function getCheckBox(logLevel) {',
-'				return $("switch_" + logLevel);',
-'			}',
-'',
-'			function getIeWrappedLogContainer() {',
-'				return $("log_wrapped");',
-'			}',
-'',
-'			function getIeUnwrappedLogContainer() {',
-'				return $("log_unwrapped");',
-'			}',
-'',
-'			function applyFilters() {',
-'				for (var i = 0; i < logLevels.length; i++) {',
-'					if (getCheckBox(logLevels[i]).checked) {',
-'						addClass(logMainContainer, logLevels[i]);',
-'					} else {',
-'						removeClass(logMainContainer, logLevels[i]);',
-'					}',
-'				}',
-'				updateSearchFromFilters();',
-'			}',
-'',
-'			function toggleAllLevels() {',
-'				var turnOn = $("switch_ALL").checked;',
-'				for (var i = 0; i < logLevels.length; i++) {',
-'					getCheckBox(logLevels[i]).checked = turnOn;',
-'					if (turnOn) {',
-'						addClass(logMainContainer, logLevels[i]);',
-'					} else {',
-'						removeClass(logMainContainer, logLevels[i]);',
-'					}',
-'				}',
-'			}',
-'',
-'			function checkAllLevels() {',
-'				for (var i = 0; i < logLevels.length; i++) {',
-'					if (!getCheckBox(logLevels[i]).checked) {',
-'						getCheckBox("ALL").checked = false;',
-'						return;',
-'					}',
-'				}',
-'				getCheckBox("ALL").checked = true;',
-'			}',
-'',
-'			function clearLog() {',
-'				rootGroup.clear();',
-'				currentGroup = rootGroup;',
-'				logEntries = [];',
-'				logItems = [];',
-'				logEntriesAndSeparators = [];',
-' 				doSearch();',
-'			}',
-'',
-'			function toggleWrap() {',
-'				var enable = $("wrap").checked;',
-'				if (enable) {',
-'					addClass(logMainContainer, "wrap");',
-'				} else {',
-'					removeClass(logMainContainer, "wrap");',
-'				}',
-'				refreshCurrentMatch();',
-'			}',
-'',
-'			/* ------------------------------------------------------------------- */',
-'',
-'			// Search',
-'',
-'			var searchTimer = null;',
-'',
-'			function scheduleSearch() {',
-'				try {',
-'					clearTimeout(searchTimer);',
-'				} catch (ex) {',
-'					// Do nothing',
-'				}',
-'				searchTimer = setTimeout(doSearch, 500);',
-'			}',
-'',
-'			function Search(searchTerm, isRegex, searchRegex, isCaseSensitive) {',
-'				this.searchTerm = searchTerm;',
-'				this.isRegex = isRegex;',
-'				this.searchRegex = searchRegex;',
-'				this.isCaseSensitive = isCaseSensitive;',
-'				this.matches = [];',
-'			}',
-'',
-'			Search.prototype = {',
-'				hasMatches: function() {',
-'					return this.matches.length > 0;',
-'				},',
-'',
-'				hasVisibleMatches: function() {',
-'					if (this.hasMatches()) {',
-'						for (var i = 0; i < this.matches.length; i++) {',
-'							if (this.matches[i].isVisible()) {',
-'								return true;',
-'							}',
-'						}',
-'					}',
-'					return false;',
-'				},',
-'',
-'				match: function(logEntry) {',
-'					var entryText = String(logEntry.formattedMessage);',
-'					var matchesSearch = false;',
-'					if (this.isRegex) {',
-'						matchesSearch = this.searchRegex.test(entryText);',
-'					} else if (this.isCaseSensitive) {',
-'						matchesSearch = (entryText.indexOf(this.searchTerm) > -1);',
-'					} else {',
-'						matchesSearch = (entryText.toLowerCase().indexOf(this.searchTerm.toLowerCase()) > -1);',
-'					}',
-'					return matchesSearch;',
-'				},',
-'',
-'				getNextVisibleMatchIndex: function() {',
-'					for (var i = currentMatchIndex + 1; i < this.matches.length; i++) {',
-'						if (this.matches[i].isVisible()) {',
-'							return i;',
-'						}',
-'					}',
-'					// Start again from the first match',
-'					for (i = 0; i <= currentMatchIndex; i++) {',
-'						if (this.matches[i].isVisible()) {',
-'							return i;',
-'						}',
-'					}',
-'					return -1;',
-'				},',
-'',
-'				getPreviousVisibleMatchIndex: function() {',
-'					for (var i = currentMatchIndex - 1; i >= 0; i--) {',
-'						if (this.matches[i].isVisible()) {',
-'							return i;',
-'						}',
-'					}',
-'					// Start again from the last match',
-'					for (var i = this.matches.length - 1; i >= currentMatchIndex; i--) {',
-'						if (this.matches[i].isVisible()) {',
-'							return i;',
-'						}',
-'					}',
-'					return -1;',
-'				},',
-'',
-'				applyTo: function(logEntry) {',
-'					var doesMatch = this.match(logEntry);',
-'					if (doesMatch) {',
-'						logEntry.group.expand();',
-'						logEntry.setSearchMatch(true);',
-'						var logEntryContent;',
-'						var wrappedLogEntryContent;',
-'						var searchTermReplacementStartTag = "<span class=\\\"searchterm\\\">";',
-'						var searchTermReplacementEndTag = "<" + "/span>";',
-'						var preTagName = isIe ? "pre" : "span";',
-'						var preStartTag = "<" + preTagName + " class=\\\"pre\\\">";',
-'						var preEndTag = "<" + "/" + preTagName + ">";',
-'						var startIndex = 0;',
-'						var searchIndex, matchedText, textBeforeMatch;',
-'						if (this.isRegex) {',
-'							var flags = this.isCaseSensitive ? "g" : "gi";',
-'							var capturingRegex = new RegExp("(" + this.searchRegex.source + ")", flags);',
-'',
-'							// Replace the search term with temporary tokens for the start and end tags',
-'							var rnd = ("" + Math.random()).substr(2);',
-'							var startToken = "%%s" + rnd + "%%";',
-'							var endToken = "%%e" + rnd + "%%";',
-'							logEntryContent = logEntry.formattedMessage.replace(capturingRegex, startToken + "$1" + endToken);',
-'',
-'							// Escape the HTML to get rid of angle brackets',
-'							logEntryContent = escapeHtml(logEntryContent);',
-'',
-'							// Substitute the proper HTML back in for the search match',
-'							var result;',
-'							var searchString = logEntryContent;',
-'							logEntryContent = "";',
-'							wrappedLogEntryContent = "";',
-'							while ((searchIndex = searchString.indexOf(startToken, startIndex)) > -1) {',
-'								var endTokenIndex = searchString.indexOf(endToken, searchIndex);',
-'								matchedText = searchString.substring(searchIndex + startToken.length, endTokenIndex);',
-'								textBeforeMatch = searchString.substring(startIndex, searchIndex);',
-'								logEntryContent += preStartTag + textBeforeMatch + preEndTag;',
-'								logEntryContent += searchTermReplacementStartTag + preStartTag + matchedText +',
-'									preEndTag + searchTermReplacementEndTag;',
-'								if (isIe) {',
-'									wrappedLogEntryContent += textBeforeMatch + searchTermReplacementStartTag +',
-'										matchedText + searchTermReplacementEndTag;',
-'								}',
-'								startIndex = endTokenIndex + endToken.length;',
-'							}',
-'							logEntryContent += preStartTag + searchString.substr(startIndex) + preEndTag;',
-'							if (isIe) {',
-'								wrappedLogEntryContent += searchString.substr(startIndex);',
-'							}',
-'						} else {',
-'							logEntryContent = "";',
-'							wrappedLogEntryContent = "";',
-'							var searchTermReplacementLength = searchTermReplacementStartTag.length +',
-'								this.searchTerm.length + searchTermReplacementEndTag.length;',
-'							var searchTermLength = this.searchTerm.length;',
-'							var searchTermLowerCase = this.searchTerm.toLowerCase();',
-'							var logTextLowerCase = logEntry.formattedMessage.toLowerCase();',
-'							while ((searchIndex = logTextLowerCase.indexOf(searchTermLowerCase, startIndex)) > -1) {',
-'								matchedText = escapeHtml(logEntry.formattedMessage.substr(searchIndex, this.searchTerm.length));',
-'								textBeforeMatch = escapeHtml(logEntry.formattedMessage.substring(startIndex, searchIndex));',
-'								var searchTermReplacement = searchTermReplacementStartTag +',
-'									preStartTag + matchedText + preEndTag + searchTermReplacementEndTag;',
-'								logEntryContent += preStartTag + textBeforeMatch + preEndTag + searchTermReplacement;',
-'								if (isIe) {',
-'									wrappedLogEntryContent += textBeforeMatch + searchTermReplacementStartTag +',
-'										matchedText + searchTermReplacementEndTag;',
-'								}',
-'								startIndex = searchIndex + searchTermLength;',
-'							}',
-'							var textAfterLastMatch = escapeHtml(logEntry.formattedMessage.substr(startIndex));',
-'							logEntryContent += preStartTag + textAfterLastMatch + preEndTag;',
-'							if (isIe) {',
-'								wrappedLogEntryContent += textAfterLastMatch;',
-'							}',
-'						}',
-'						logEntry.setContent(logEntryContent, wrappedLogEntryContent);',
-'						var logEntryMatches = logEntry.getSearchMatches();',
-'						this.matches = this.matches.concat(logEntryMatches);',
-'					} else {',
-'						logEntry.setSearchMatch(false);',
-'						logEntry.setContent(logEntry.formattedMessage, logEntry.formattedMessage);',
-'					}',
-'					return doesMatch;',
-'				},',
-'',
-'				removeMatches: function(logEntries) {',
-'					var matchesToRemoveCount = 0;',
-'					var currentMatchRemoved = false;',
-'					var matchesToRemove = [];',
-'					var i, iLen, j, jLen;',
-'',
-'					// Establish the list of matches to be removed',
-'					for (i = 0, iLen = this.matches.length; i < iLen; i++) {',
-'						for (j = 0, jLen = logEntries.length; j < jLen; j++) {',
-'							if (this.matches[i].belongsTo(logEntries[j])) {',
-'								matchesToRemove.push(this.matches[i]);',
-'								if (i === currentMatchIndex) {',
-'									currentMatchRemoved = true;',
-'								}',
-'							}',
-'						}',
-'					}',
-'',
-'					// Set the new current match index if the current match has been deleted',
-'					// This will be the first match that appears after the first log entry being',
-'					// deleted, if one exists; otherwise, it\'s the first match overall',
-'					var newMatch = currentMatchRemoved ? null : this.matches[currentMatchIndex];',
-'					if (currentMatchRemoved) {',
-'						for (i = currentMatchIndex, iLen = this.matches.length; i < iLen; i++) {',
-'							if (this.matches[i].isVisible() && !array_contains(matchesToRemove, this.matches[i])) {',
-'								newMatch = this.matches[i];',
-'								break;',
-'							}',
-'						}',
-'					}',
-'',
-'					// Remove the matches',
-'					for (i = 0, iLen = matchesToRemove.length; i < iLen; i++) {',
-'						array_remove(this.matches, matchesToRemove[i]);',
-'						matchesToRemove[i].remove();',
-'					}',
-'',
-'					// Set the new match, if one exists',
-'					if (this.hasVisibleMatches()) {',
-'						if (newMatch === null) {',
-'							setCurrentMatchIndex(0);',
-'						} else {',
-'							// Get the index of the new match',
-'							var newMatchIndex = 0;',
-'							for (i = 0, iLen = this.matches.length; i < iLen; i++) {',
-'								if (newMatch === this.matches[i]) {',
-'									newMatchIndex = i;',
-'									break;',
-'								}',
-'							}',
-'							setCurrentMatchIndex(newMatchIndex);',
-'						}',
-'					} else {',
-'						currentMatchIndex = null;',
-'						displayNoMatches();',
-'					}',
-'				}',
-'			};',
-'',
-'			function getPageOffsetTop(el, container) {',
-'				var currentEl = el;',
-'				var y = 0;',
-'				while (currentEl && currentEl != container) {',
-'					y += currentEl.offsetTop;',
-'					currentEl = currentEl.offsetParent;',
-'				}',
-'				return y;',
-'			}',
-'',
-'			function scrollIntoView(el) {',
-'				var logContainer = logMainContainer;',
-'				// Check if the whole width of the element is visible and centre if not',
-'				if (!$("wrap").checked) {',
-'					var logContainerLeft = logContainer.scrollLeft;',
-'					var logContainerRight = logContainerLeft  + logContainer.offsetWidth;',
-'					var elLeft = el.offsetLeft;',
-'					var elRight = elLeft + el.offsetWidth;',
-'					if (elLeft < logContainerLeft || elRight > logContainerRight) {',
-'						logContainer.scrollLeft = elLeft - (logContainer.offsetWidth - el.offsetWidth) / 2;',
-'					}',
-'				}',
-'				// Check if the whole height of the element is visible and centre if not',
-'				var logContainerTop = logContainer.scrollTop;',
-'				var logContainerBottom = logContainerTop  + logContainer.offsetHeight;',
-'				var elTop = getPageOffsetTop(el) - getToolBarsHeight();',
-'				var elBottom = elTop + el.offsetHeight;',
-'				if (elTop < logContainerTop || elBottom > logContainerBottom) {',
-'					logContainer.scrollTop = elTop - (logContainer.offsetHeight - el.offsetHeight) / 2;',
-'				}',
-'			}',
-'',
-'			function Match(logEntryLevel, spanInMainDiv, spanInUnwrappedPre, spanInWrappedDiv) {',
-'				this.logEntryLevel = logEntryLevel;',
-'				this.spanInMainDiv = spanInMainDiv;',
-'				if (isIe) {',
-'					this.spanInUnwrappedPre = spanInUnwrappedPre;',
-'					this.spanInWrappedDiv = spanInWrappedDiv;',
-'				}',
-'				this.mainSpan = isIe ? spanInUnwrappedPre : spanInMainDiv;',
-'			}',
-'',
-'			Match.prototype = {',
-'				equals: function(match) {',
-'					return this.mainSpan === match.mainSpan;',
-'				},',
-'',
-'				setCurrent: function() {',
-'					if (isIe) {',
-'						addClass(this.spanInUnwrappedPre, "currentmatch");',
-'						addClass(this.spanInWrappedDiv, "currentmatch");',
-'						// Scroll the visible one into view',
-'						var elementToScroll = $("wrap").checked ? this.spanInWrappedDiv : this.spanInUnwrappedPre;',
-'						scrollIntoView(elementToScroll);',
-'					} else {',
-'						addClass(this.spanInMainDiv, "currentmatch");',
-'						scrollIntoView(this.spanInMainDiv);',
-'					}',
-'				},',
-'',
-'				belongsTo: function(logEntry) {',
-'					if (isIe) {',
-'						return isDescendant(this.spanInUnwrappedPre, logEntry.unwrappedPre);',
-'					} else {',
-'						return isDescendant(this.spanInMainDiv, logEntry.mainDiv);',
-'					}',
-'				},',
-'',
-'				setNotCurrent: function() {',
-'					if (isIe) {',
-'						removeClass(this.spanInUnwrappedPre, "currentmatch");',
-'						removeClass(this.spanInWrappedDiv, "currentmatch");',
-'					} else {',
-'						removeClass(this.spanInMainDiv, "currentmatch");',
-'					}',
-'				},',
-'',
-'				isOrphan: function() {',
-'					return isOrphan(this.mainSpan);',
-'				},',
-'',
-'				isVisible: function() {',
-'					return getCheckBox(this.logEntryLevel).checked;',
-'				},',
-'',
-'				remove: function() {',
-'					if (isIe) {',
-'						this.spanInUnwrappedPre = null;',
-'						this.spanInWrappedDiv = null;',
-'					} else {',
-'						this.spanInMainDiv = null;',
-'					}',
-'				}',
-'			};',
-'',
-'			var currentSearch = null;',
-'			var currentMatchIndex = null;',
-'',
-'			function doSearch() {',
-'				var searchBox = $("searchBox");',
-'				var searchTerm = searchBox.value;',
-'				var isRegex = $("searchRegex").checked;',
-'				var isCaseSensitive = $("searchCaseSensitive").checked;',
-'				var i;',
-'',
-'				if (searchTerm === "") {',
-'					$("searchReset").disabled = true;',
-'					$("searchNav").style.display = "none";',
-'					removeClass(document.body, "searching");',
-'					removeClass(searchBox, "hasmatches");',
-'					removeClass(searchBox, "nomatches");',
-'					for (i = 0; i < logEntries.length; i++) {',
-'						logEntries[i].clearSearch();',
-'						logEntries[i].setContent(logEntries[i].formattedMessage, logEntries[i].formattedMessage);',
-'					}',
-'					currentSearch = null;',
-'					setLogContainerHeight();',
-'				} else {',
-'					$("searchReset").disabled = false;',
-'					$("searchNav").style.display = "block";',
-'					var searchRegex;',
-'					var regexValid;',
-'					if (isRegex) {',
-'						try {',
-'							searchRegex = isCaseSensitive ? new RegExp(searchTerm, "g") : new RegExp(searchTerm, "gi");',
-'							regexValid = true;',
-'							replaceClass(searchBox, "validregex", "invalidregex");',
-'							searchBox.title = "Valid regex";',
-'						} catch (ex) {',
-'							regexValid = false;',
-'							replaceClass(searchBox, "invalidregex", "validregex");',
-'							searchBox.title = "Invalid regex: " + (ex.message ? ex.message : (ex.description ? ex.description : "unknown error"));',
-'							return;',
-'						}',
-'					} else {',
-'						searchBox.title = "";',
-'						removeClass(searchBox, "validregex");',
-'						removeClass(searchBox, "invalidregex");',
-'					}',
-'					addClass(document.body, "searching");',
-'					currentSearch = new Search(searchTerm, isRegex, searchRegex, isCaseSensitive);',
-'					for (i = 0; i < logEntries.length; i++) {',
-'						currentSearch.applyTo(logEntries[i]);',
-'					}',
-'					setLogContainerHeight();',
-'',
-'					// Highlight the first search match',
-'					if (currentSearch.hasVisibleMatches()) {',
-'						setCurrentMatchIndex(0);',
-'						displayMatches();',
-'					} else {',
-'						displayNoMatches();',
-'					}',
-'				}',
-'			}',
-'',
-'			function updateSearchFromFilters() {',
-'				if (currentSearch) {',
-'					if (currentSearch.hasMatches()) {',
-'						if (currentMatchIndex === null) {',
-'							currentMatchIndex = 0;',
-'						}',
-'						var currentMatch = currentSearch.matches[currentMatchIndex];',
-'						if (currentMatch.isVisible()) {',
-'							displayMatches();',
-'							setCurrentMatchIndex(currentMatchIndex);',
-'						} else {',
-'							currentMatch.setNotCurrent();',
-'							// Find the next visible match, if one exists',
-'							var nextVisibleMatchIndex = currentSearch.getNextVisibleMatchIndex();',
-'							if (nextVisibleMatchIndex > -1) {',
-'								setCurrentMatchIndex(nextVisibleMatchIndex);',
-'								displayMatches();',
-'							} else {',
-'								displayNoMatches();',
-'							}',
-'						}',
-'					} else {',
-'						displayNoMatches();',
-'					}',
-'				}',
-'			}',
-'',
-'			function refreshCurrentMatch() {',
-'				if (currentSearch && currentSearch.hasVisibleMatches()) {',
-'					setCurrentMatchIndex(currentMatchIndex);',
-'				}',
-'			}',
-'',
-'			function displayMatches() {',
-'				replaceClass($("searchBox"), "hasmatches", "nomatches");',
-'				$("searchBox").title = "" + currentSearch.matches.length + " matches found";',
-'				$("searchNav").style.display = "block";',
-'				setLogContainerHeight();',
-'			}',
-'',
-'			function displayNoMatches() {',
-'				replaceClass($("searchBox"), "nomatches", "hasmatches");',
-'				$("searchBox").title = "No matches found";',
-'				$("searchNav").style.display = "none";',
-'				setLogContainerHeight();',
-'			}',
-'',
-'			function toggleSearchEnabled(enable) {',
-'				enable = (typeof enable == "undefined") ? !$("searchDisable").checked : enable;',
-'				$("searchBox").disabled = !enable;',
-'				$("searchReset").disabled = !enable;',
-'				$("searchRegex").disabled = !enable;',
-'				$("searchNext").disabled = !enable;',
-'				$("searchPrevious").disabled = !enable;',
-'				$("searchCaseSensitive").disabled = !enable;',
-'				$("searchNav").style.display = (enable && ($("searchBox").value !== "") &&',
-'						currentSearch && currentSearch.hasVisibleMatches()) ?',
-'					"block" : "none";',
-'				if (enable) {',
-'					removeClass($("search"), "greyedout");',
-'					addClass(document.body, "searching");',
-'					if ($("searchHighlight").checked) {',
-'						addClass(logMainContainer, "searchhighlight");',
-'					} else {',
-'						removeClass(logMainContainer, "searchhighlight");',
-'					}',
-'					if ($("searchFilter").checked) {',
-'						addClass(logMainContainer, "searchfilter");',
-'					} else {',
-'						removeClass(logMainContainer, "searchfilter");',
-'					}',
-'					$("searchDisable").checked = !enable;',
-'				} else {',
-'					addClass($("search"), "greyedout");',
-'					removeClass(document.body, "searching");',
-'					removeClass(logMainContainer, "searchhighlight");',
-'					removeClass(logMainContainer, "searchfilter");',
-'				}',
-'				setLogContainerHeight();',
-'			}',
-'',
-'			function toggleSearchFilter() {',
-'				var enable = $("searchFilter").checked;',
-'				if (enable) {',
-'					addClass(logMainContainer, "searchfilter");',
-'				} else {',
-'					removeClass(logMainContainer, "searchfilter");',
-'				}',
-'				refreshCurrentMatch();',
-'			}',
-'',
-'			function toggleSearchHighlight() {',
-'				var enable = $("searchHighlight").checked;',
-'				if (enable) {',
-'					addClass(logMainContainer, "searchhighlight");',
-'				} else {',
-'					removeClass(logMainContainer, "searchhighlight");',
-'				}',
-'			}',
-'',
-'			function clearSearch() {',
-'				$("searchBox").value = "";',
-'				doSearch();',
-'			}',
-'',
-'			function searchNext() {',
-'				if (currentSearch !== null && currentMatchIndex !== null) {',
-'					currentSearch.matches[currentMatchIndex].setNotCurrent();',
-'					var nextMatchIndex = currentSearch.getNextVisibleMatchIndex();',
-'					if (nextMatchIndex > currentMatchIndex || confirm("Reached the end of the page. Start from the top?")) {',
-'						setCurrentMatchIndex(nextMatchIndex);',
-'					}',
-'				}',
-'			}',
-'',
-'			function searchPrevious() {',
-'				if (currentSearch !== null && currentMatchIndex !== null) {',
-'					currentSearch.matches[currentMatchIndex].setNotCurrent();',
-'					var previousMatchIndex = currentSearch.getPreviousVisibleMatchIndex();',
-'					if (previousMatchIndex < currentMatchIndex || confirm("Reached the start of the page. Continue from the bottom?")) {',
-'						setCurrentMatchIndex(previousMatchIndex);',
-'					}',
-'				}',
-'			}',
-'',
-'			function setCurrentMatchIndex(index) {',
-'				currentMatchIndex = index;',
-'				currentSearch.matches[currentMatchIndex].setCurrent();',
-'			}',
-'',
-'			/* ------------------------------------------------------------------------- */',
-'',
-'			// CSS Utilities',
-'',
-'			function addClass(el, cssClass) {',
-'				if (!hasClass(el, cssClass)) {',
-'					if (el.className) {',
-'						el.className += " " + cssClass;',
-'					} else {',
-'						el.className = cssClass;',
-'					}',
-'				}',
-'			}',
-'',
-'			function hasClass(el, cssClass) {',
-'				if (el.className) {',
-'					var classNames = el.className.split(" ");',
-'					return array_contains(classNames, cssClass);',
-'				}',
-'				return false;',
-'			}',
-'',
-'			function removeClass(el, cssClass) {',
-'				if (hasClass(el, cssClass)) {',
-'					// Rebuild the className property',
-'					var existingClasses = el.className.split(" ");',
-'					var newClasses = [];',
-'					for (var i = 0, len = existingClasses.length; i < len; i++) {',
-'						if (existingClasses[i] != cssClass) {',
-'							newClasses[newClasses.length] = existingClasses[i];',
-'						}',
-'					}',
-'					el.className = newClasses.join(" ");',
-'				}',
-'			}',
-'',
-'			function replaceClass(el, newCssClass, oldCssClass) {',
-'				removeClass(el, oldCssClass);',
-'				addClass(el, newCssClass);',
-'			}',
-'',
-'			/* ------------------------------------------------------------------------- */',
-'',
-'			// Other utility functions',
-'',
-'			function getElementsByClass(el, cssClass, tagName) {',
-'				var elements = el.getElementsByTagName(tagName);',
-'				var matches = [];',
-'				for (var i = 0, len = elements.length; i < len; i++) {',
-'					if (hasClass(elements[i], cssClass)) {',
-'						matches.push(elements[i]);',
-'					}',
-'				}',
-'				return matches;',
-'			}',
-'',
-'			// Syntax borrowed from Prototype library',
-'			function $(id) {',
-'				return document.getElementById(id);',
-'			}',
-'',
-'			function isDescendant(node, ancestorNode) {',
-'				while (node != null) {',
-'					if (node === ancestorNode) {',
-'						return true;',
-'					}',
-'					node = node.parentNode;',
-'				}',
-'				return false;',
-'			}',
-'',
-'			function isOrphan(node) {',
-'				var currentNode = node;',
-'				while (currentNode) {',
-'					if (currentNode == document.body) {',
-'						return false;',
-'					}',
-'					currentNode = currentNode.parentNode;',
-'				}',
-'				return true;',
-'			}',
-'',
-'			function escapeHtml(str) {',
-'				return str.replace(/&/g, "&amp;").replace(/[<]/g, "&lt;").replace(/>/g, "&gt;");',
-'			}',
-'',
-'			function getWindowWidth() {',
-'				if (window.innerWidth) {',
-'					return window.innerWidth;',
-'				} else if (document.documentElement && document.documentElement.clientWidth) {',
-'					return document.documentElement.clientWidth;',
-'				} else if (document.body) {',
-'					return document.body.clientWidth;',
-'				}',
-'				return 0;',
-'			}',
-'',
-'			function getWindowHeight() {',
-'				if (window.innerHeight) {',
-'					return window.innerHeight;',
-'				} else if (document.documentElement && document.documentElement.clientHeight) {',
-'					return document.documentElement.clientHeight;',
-'				} else if (document.body) {',
-'					return document.body.clientHeight;',
-'				}',
-'				return 0;',
-'			}',
-'',
-'			function getToolBarsHeight() {',
-'				return $("switches").offsetHeight;',
-'			}',
-'',
-'			function getChromeHeight() {',
-'				var height = getToolBarsHeight();',
-'				if (showCommandLine) {',
-'					height += $("commandLine").offsetHeight;',
-'				}',
-'				return height;',
-'			}',
-'',
-'			function setLogContainerHeight() {',
-'				if (logMainContainer) {',
-'					var windowHeight = getWindowHeight();',
-'					$("body").style.height = getWindowHeight() + "px";',
-'					logMainContainer.style.height = "" +',
-'						Math.max(0, windowHeight - getChromeHeight()) + "px";',
-'				}',
-'			}',
-'',
-'			function setCommandInputWidth() {',
-'				if (showCommandLine) {',
-'					$("command").style.width = "" + Math.max(0, $("commandLineContainer").offsetWidth -',
-'						($("evaluateButton").offsetWidth + 13)) + "px";',
-'				}',
-'			}',
-'',
-'			window.onresize = function() {',
-'				setCommandInputWidth();',
-'				setLogContainerHeight();',
-'			};',
-'',
-'			if (!Array.prototype.push) {',
-'				Array.prototype.push = function() {',
-'			        for (var i = 0, len = arguments.length; i < len; i++){',
-'			            this[this.length] = arguments[i];',
-'			        }',
-'			        return this.length;',
-'				};',
-'			}',
-'',
-'			if (!Array.prototype.pop) {',
-'				Array.prototype.pop = function() {',
-'					if (this.length > 0) {',
-'						var val = this[this.length - 1];',
-'						this.length = this.length - 1;',
-'						return val;',
-'					}',
-'				};',
-'			}',
-'',
-'			if (!Array.prototype.shift) {',
-'				Array.prototype.shift = function() {',
-'					if (this.length > 0) {',
-'						var firstItem = this[0];',
-'						for (var i = 0, len = this.length - 1; i < len; i++) {',
-'							this[i] = this[i + 1];',
-'						}',
-'						this.length = this.length - 1;',
-'						return firstItem;',
-'					}',
-'				};',
-'			}',
-'',
-'			if (!Array.prototype.splice) {',
-'				Array.prototype.splice = function(startIndex, deleteCount) {',
-'					var itemsAfterDeleted = this.slice(startIndex + deleteCount);',
-'					var itemsDeleted = this.slice(startIndex, startIndex + deleteCount);',
-'					this.length = startIndex;',
-'					// Copy the arguments into a proper Array object',
-'					var argumentsArray = [];',
-'					for (var i = 0, len = arguments.length; i < len; i++) {',
-'						argumentsArray[i] = arguments[i];',
-'					}',
-'					var itemsToAppend = (argumentsArray.length > 2) ?',
-'						itemsAfterDeleted = argumentsArray.slice(2).concat(itemsAfterDeleted) : itemsAfterDeleted;',
-'					for (i = 0, len = itemsToAppend.length; i < len; i++) {',
-'						this.push(itemsToAppend[i]);',
-'					}',
-'					return itemsDeleted;',
-'				};',
-'			}',
-'',
-'			function array_remove(arr, val) {',
-'				var index = -1;',
-'				for (var i = 0, len = arr.length; i < len; i++) {',
-'					if (arr[i] === val) {',
-'						index = i;',
-'						break;',
-'					}',
-'				}',
-'				if (index >= 0) {',
-'					arr.splice(index, 1);',
-'					return index;',
-'				} else {',
-'					return false;',
-'				}',
-'			}',
-'',
-'			function array_removeFromStart(array, numberToRemove) {',
-'				if (Array.prototype.splice) {',
-'					array.splice(0, numberToRemove);',
-'				} else {',
-'					for (var i = numberToRemove, len = array.length; i < len; i++) {',
-'						array[i - numberToRemove] = array[i];',
-'					}',
-'					array.length = array.length - numberToRemove;',
-'				}',
-'				return array;',
-'			}',
-'',
-'			function array_contains(arr, val) {',
-'				for (var i = 0, len = arr.length; i < len; i++) {',
-'					if (arr[i] == val) {',
-'						return true;',
-'					}',
-'				}',
-'				return false;',
-'			}',
-'',
-'			function getErrorMessage(ex) {',
-'				if (ex.message) {',
-'					return ex.message;',
-'				} else if (ex.description) {',
-'					return ex.description;',
-'				}',
-'				return "" + ex;',
-'			}',
-'',
-'			function moveCaretToEnd(input) {',
-'				if (input.setSelectionRange) {',
-'					input.focus();',
-'					var length = input.value.length;',
-'					input.setSelectionRange(length, length);',
-'				} else if (input.createTextRange) {',
-'					var range = input.createTextRange();',
-'					range.collapse(false);',
-'					range.select();',
-'				}',
-'				input.focus();',
-'			}',
-'',
-'			function stopPropagation(evt) {',
-'				if (evt.stopPropagation) {',
-'					evt.stopPropagation();',
-'				} else if (typeof evt.cancelBubble != "undefined") {',
-'					evt.cancelBubble = true;',
-'				}',
-'			}',
-'',
-'			function getEvent(evt) {',
-'				return evt ? evt : event;',
-'			}',
-'',
-'			function getTarget(evt) {',
-'				return evt.target ? evt.target : evt.srcElement;',
-'			}',
-'',
-'			function getRelatedTarget(evt) {',
-'				if (evt.relatedTarget) {',
-'					return evt.relatedTarget;',
-'				} else if (evt.srcElement) {',
-'					switch(evt.type) {',
-'						case "mouseover":',
-'							return evt.fromElement;',
-'						case "mouseout":',
-'							return evt.toElement;',
-'						default:',
-'							return evt.srcElement;',
-'					}',
-'				}',
-'			}',
-'',
-'			function cancelKeyEvent(evt) {',
-'				evt.returnValue = false;',
-'				stopPropagation(evt);',
-'			}',
-'',
-'			function evalCommandLine() {',
-'				var expr = $("command").value;',
-'				evalCommand(expr);',
-'				$("command").value = "";',
-'			}',
-'',
-'			function evalLastCommand() {',
-'				if (lastCommand != null) {',
-'					evalCommand(lastCommand);',
-'				}',
-'			}',
-'',
-'			var lastCommand = null;',
-'			var commandHistory = [];',
-'			var currentCommandIndex = 0;',
-'',
-'			function evalCommand(expr) {',
-'				if (appender) {',
-'					appender.evalCommandAndAppend(expr);',
-'				} else {',
-'					var prefix = ">>> " + expr + "\\r\\n";',
-'					try {',
-'						log("INFO", prefix + eval(expr));',
-'					} catch (ex) {',
-'						log("ERROR", prefix + "Error: " + getErrorMessage(ex));',
-'					}',
-'				}',
-'				// Update command history',
-'				if (expr != commandHistory[commandHistory.length - 1]) {',
-'					commandHistory.push(expr);',
-'					// Update the appender',
-'					if (appender) {',
-'						appender.storeCommandHistory(commandHistory);',
-'					}',
-'				}',
-'				currentCommandIndex = (expr == commandHistory[currentCommandIndex]) ? currentCommandIndex + 1 : commandHistory.length;',
-'				lastCommand = expr;',
-'			}',
-'			//]]>',
-'		</script>',
-'		<style type="text/css">',
-'			body {',
-'				background-color: white;',
-'				color: black;',
-'				padding: 0;',
-'				margin: 0;',
-'				font-family: tahoma, verdana, arial, helvetica, sans-serif;',
-'				overflow: hidden;',
-'			}',
-'',
-'			div#switchesContainer input {',
-'				margin-bottom: 0;',
-'			}',
-'',
-'			div.toolbar {',
-'				border-top: solid #ffffff 1px;',
-'				border-bottom: solid #aca899 1px;',
-'				background-color: #f1efe7;',
-'				padding: 3px 5px;',
-'				font-size: 68.75%;',
-'			}',
-'',
-'			div.toolbar, div#search input {',
-'				font-family: tahoma, verdana, arial, helvetica, sans-serif;',
-'			}',
-'',
-'			div.toolbar input.button {',
-'				padding: 0 5px;',
-'				font-size: 100%;',
-'			}',
-'',
-'			div.toolbar input.hidden {',
-'				display: none;',
-'			}',
-'',
-'			div#switches input#clearButton {',
-'				margin-left: 20px;',
-'			}',
-'',
-'			div#levels label {',
-'				font-weight: bold;',
-'			}',
-'',
-'			div#levels label, div#options label {',
-'				margin-right: 5px;',
-'			}',
-'',
-'			div#levels label#wrapLabel {',
-'				font-weight: normal;',
-'			}',
-'',
-'			div#search label {',
-'				margin-right: 10px;',
-'			}',
-'',
-'			div#search label.searchboxlabel {',
-'				margin-right: 0;',
-'			}',
-'',
-'			div#search input {',
-'				font-size: 100%;',
-'			}',
-'',
-'			div#search input.validregex {',
-'				color: green;',
-'			}',
-'',
-'			div#search input.invalidregex {',
-'				color: red;',
-'			}',
-'',
-'			div#search input.nomatches {',
-'				color: white;',
-'				background-color: #ff6666;',
-'			}',
-'',
-'			div#search input.nomatches {',
-'				color: white;',
-'				background-color: #ff6666;',
-'			}',
-'',
-'			div#searchNav {',
-'				display: none;',
-'			}',
-'',
-'			div#commandLine {',
-'				display: none;',
-'			}',
-'',
-'			div#commandLine input#command {',
-'				font-size: 100%;',
-'				font-family: Courier New, Courier;',
-'			}',
-'',
-'			div#commandLine input#evaluateButton {',
-'			}',
-'',
-'			*.greyedout {',
-'				color: gray !important;',
-'				border-color: gray !important;',
-'			}',
-'',
-'			*.greyedout *.alwaysenabled { color: black; }',
-'',
-'			*.unselectable {',
-'				-khtml-user-select: none;',
-'				-moz-user-select: none;',
-'				user-select: none;',
-'			}',
-'',
-'			div#log {',
-'				font-family: Courier New, Courier;',
-'				font-size: 75%;',
-'				width: 100%;',
-'				overflow: auto;',
-'				clear: both;',
-'				position: relative;',
-'			}',
-'',
-'			div.group {',
-'				border-color: #cccccc;',
-'				border-style: solid;',
-'				border-width: 1px 0 1px 1px;',
-'				overflow: visible;',
-'			}',
-'',
-'			div.oldIe div.group, div.oldIe div.group *, div.oldIe *.logentry {',
-'				height: 1%;',
-'			}',
-'',
-'			div.group div.groupheading span.expander {',
-'				border: solid black 1px;',
-'				font-family: Courier New, Courier;',
-'				font-size: 0.833em;',
-'				background-color: #eeeeee;',
-'				position: relative;',
-'				top: -1px;',
-'				color: black;',
-'				padding: 0 2px;',
-'				cursor: pointer;',
-'				cursor: hand;',
-'				height: 1%;',
-'			}',
-'',
-'			div.group div.groupcontent {',
-'				margin-left: 10px;',
-'				padding-bottom: 2px;',
-'				overflow: visible;',
-'			}',
-'',
-'			div.group div.expanded {',
-'				display: block;',
-'			}',
-'',
-'			div.group div.collapsed {',
-'				display: none;',
-'			}',
-'',
-'			*.logentry {',
-'				overflow: visible;',
-'				display: none;',
-'				white-space: pre;',
-'			}',
-'',
-'			span.pre {',
-'				white-space: pre;',
-'			}',
-'			',
-'			pre.unwrapped {',
-'				display: inline !important;',
-'			}',
-'',
-'			pre.unwrapped pre.pre, div.wrapped pre.pre {',
-'				display: inline;',
-'			}',
-'',
-'			div.wrapped pre.pre {',
-'				white-space: normal;',
-'			}',
-'',
-'			div.wrapped {',
-'				display: none;',
-'			}',
-'',
-'			body.searching *.logentry span.currentmatch {',
-'				color: white !important;',
-'				background-color: green !important;',
-'			}',
-'',
-'			body.searching div.searchhighlight *.logentry span.searchterm {',
-'				color: black;',
-'				background-color: yellow;',
-'			}',
-'',
-'			div.wrap *.logentry {',
-'				white-space: normal !important;',
-'				border-width: 0 0 1px 0;',
-'				border-color: #dddddd;',
-'				border-style: dotted;',
-'			}',
-'',
-'			div.wrap #log_wrapped, #log_unwrapped {',
-'				display: block;',
-'			}',
-'',
-'			div.wrap #log_unwrapped, #log_wrapped {',
-'				display: none;',
-'			}',
-'',
-'			div.wrap *.logentry span.pre {',
-'				overflow: visible;',
-'				white-space: normal;',
-'			}',
-'',
-'			div.wrap *.logentry pre.unwrapped {',
-'				display: none;',
-'			}',
-'',
-'			div.wrap *.logentry span.wrapped {',
-'				display: inline;',
-'			}',
-'',
-'			div.searchfilter *.searchnonmatch {',
-'				display: none !important;',
-'			}',
-'',
-'			div#log *.TRACE, label#label_TRACE {',
-'				color: #666666;',
-'			}',
-'',
-'			div#log *.DEBUG, label#label_DEBUG {',
-'				color: green;',
-'			}',
-'',
-'			div#log *.INFO, label#label_INFO {',
-'				color: #000099;',
-'			}',
-'',
-'			div#log *.WARN, label#label_WARN {',
-'				color: #999900;',
-'			}',
-'',
-'			div#log *.ERROR, label#label_ERROR {',
-'				color: red;',
-'			}',
-'',
-'			div#log *.FATAL, label#label_FATAL {',
-'				color: #660066;',
-'			}',
-'',
-'			div.TRACE#log *.TRACE,',
-'			div.DEBUG#log *.DEBUG,',
-'			div.INFO#log *.INFO,',
-'			div.WARN#log *.WARN,',
-'			div.ERROR#log *.ERROR,',
-'			div.FATAL#log *.FATAL {',
-'				display: block;',
-'			}',
-'',
-'			div#log div.separator {',
-'				background-color: #cccccc;',
-'				margin: 5px 0;',
-'				line-height: 1px;',
-'			}',
-'		</style>',
-'	</head>',
-'',
-'	<body id="body">',
-'		<div id="switchesContainer">',
-'			<div id="switches">',
-'				<div id="levels" class="toolbar">',
-'					Filters:',
-'					<input type="checkbox" id="switch_TRACE" onclick="applyFilters(); checkAllLevels()" checked="checked" title="Show/hide trace messages" /><label for="switch_TRACE" id="label_TRACE">trace</label>',
-'					<input type="checkbox" id="switch_DEBUG" onclick="applyFilters(); checkAllLevels()" checked="checked" title="Show/hide debug messages" /><label for="switch_DEBUG" id="label_DEBUG">debug</label>',
-'					<input type="checkbox" id="switch_INFO" onclick="applyFilters(); checkAllLevels()" checked="checked" title="Show/hide info messages" /><label for="switch_INFO" id="label_INFO">info</label>',
-'					<input type="checkbox" id="switch_WARN" onclick="applyFilters(); checkAllLevels()" checked="checked" title="Show/hide warn messages" /><label for="switch_WARN" id="label_WARN">warn</label>',
-'					<input type="checkbox" id="switch_ERROR" onclick="applyFilters(); checkAllLevels()" checked="checked" title="Show/hide error messages" /><label for="switch_ERROR" id="label_ERROR">error</label>',
-'					<input type="checkbox" id="switch_FATAL" onclick="applyFilters(); checkAllLevels()" checked="checked" title="Show/hide fatal messages" /><label for="switch_FATAL" id="label_FATAL">fatal</label>',
-'					<input type="checkbox" id="switch_ALL" onclick="toggleAllLevels(); applyFilters()" checked="checked" title="Show/hide all messages" /><label for="switch_ALL" id="label_ALL">all</label>',
-'				</div>',
-'				<div id="search" class="toolbar">',
-'					<label for="searchBox" class="searchboxlabel">Search:</label> <input type="text" id="searchBox" onclick="toggleSearchEnabled(true)" onkeyup="scheduleSearch()" size="20" />',
-'					<input type="button" id="searchReset" disabled="disabled" value="Reset" onclick="clearSearch()" class="button" title="Reset the search" />',
-'					<input type="checkbox" id="searchRegex" onclick="doSearch()" title="If checked, search is treated as a regular expression" /><label for="searchRegex">Regex</label>',
-'					<input type="checkbox" id="searchCaseSensitive" onclick="doSearch()" title="If checked, search is case sensitive" /><label for="searchCaseSensitive">Match case</label>',
-'					<input type="checkbox" id="searchDisable" onclick="toggleSearchEnabled()" title="Enable/disable search" /><label for="searchDisable" class="alwaysenabled">Disable</label>',
-'					<div id="searchNav">',
-'						<input type="button" id="searchNext" disabled="disabled" value="Next" onclick="searchNext()" class="button" title="Go to the next matching log entry" />',
-'						<input type="button" id="searchPrevious" disabled="disabled" value="Previous" onclick="searchPrevious()" class="button" title="Go to the previous matching log entry" />',
-'						<input type="checkbox" id="searchFilter" onclick="toggleSearchFilter()" title="If checked, non-matching log entries are filtered out" /><label for="searchFilter">Filter</label>',
-'						<input type="checkbox" id="searchHighlight" onclick="toggleSearchHighlight()" title="Highlight matched search terms" /><label for="searchHighlight" class="alwaysenabled">Highlight all</label>',
-'					</div>',
-'				</div>',
-'				<div id="options" class="toolbar">',
-'					Options:',
-'					<input type="checkbox" id="enableLogging" onclick="toggleLoggingEnabled()" checked="checked" title="Enable/disable logging" /><label for="enableLogging" id="enableLoggingLabel">Log</label>',
-'					<input type="checkbox" id="wrap" onclick="toggleWrap()" title="Enable / disable word wrap" /><label for="wrap" id="wrapLabel">Wrap</label>',
-'					<input type="checkbox" id="newestAtTop" onclick="toggleNewestAtTop()" title="If checked, causes newest messages to appear at the top" /><label for="newestAtTop" id="newestAtTopLabel">Newest at the top</label>',
-'					<input type="checkbox" id="scrollToLatest" onclick="toggleScrollToLatest()" checked="checked" title="If checked, window automatically scrolls to a new message when it is added" /><label for="scrollToLatest" id="scrollToLatestLabel">Scroll to latest</label>',
-'					<input type="button" id="clearButton" value="Clear" onclick="clearLog()" class="button" title="Clear all log messages"  />',
-'					<input type="button" id="hideButton" value="Hide" onclick="hide()" class="hidden button" title="Hide the console" />',
-'					<input type="button" id="closeButton" value="Close" onclick="closeWindow()" class="hidden button" title="Close the window" />',
-'				</div>',
-'			</div>',
-'		</div>',
-'		<div id="log" class="TRACE DEBUG INFO WARN ERROR FATAL"></div>',
-'		<div id="commandLine" class="toolbar">',
-'			<div id="commandLineContainer">',
-'				<input type="text" id="command" title="Enter a JavaScript command here and hit return or press \'Evaluate\'" />',
-'				<input type="button" id="evaluateButton" value="Evaluate" class="button" title="Evaluate the command" onclick="evalCommandLine()" />',
-'			</div>',
-'		</div>',
-'	</body>',
-'</html>',
-''
-];
-		};
-
-		var defaultCommandLineFunctions = [];
-
-		ConsoleAppender = function() {};
-
-		var consoleAppenderIdCounter = 1;
-		ConsoleAppender.prototype = new Appender();
-
-		ConsoleAppender.prototype.create = function(inPage, container,
-				lazyInit, initiallyMinimized, useDocumentWrite, width, height, focusConsoleWindow) {
-			var appender = this;
-
-			// Common properties
-			var initialized = false;
-			var consoleWindowCreated = false;
-			var consoleWindowLoaded = false;
-			var consoleClosed = false;
-
-			var queuedLoggingEvents = [];
-			var isSupported = true;
-			var consoleAppenderId = consoleAppenderIdCounter++;
-
-			// Local variables
-			initiallyMinimized = extractBooleanFromParam(initiallyMinimized, this.defaults.initiallyMinimized);
-			lazyInit = extractBooleanFromParam(lazyInit, this.defaults.lazyInit);
-			useDocumentWrite = extractBooleanFromParam(useDocumentWrite, this.defaults.useDocumentWrite);
-			var newestMessageAtTop = this.defaults.newestMessageAtTop;
-			var scrollToLatestMessage = this.defaults.scrollToLatestMessage;
-			width = width ? width : this.defaults.width;
-			height = height ? height : this.defaults.height;
-			var maxMessages = this.defaults.maxMessages;
-			var showCommandLine = this.defaults.showCommandLine;
-			var commandLineObjectExpansionDepth = this.defaults.commandLineObjectExpansionDepth;
-			var showHideButton = this.defaults.showHideButton;
-            var showCloseButton = this.defaults.showCloseButton;
-            var showLogEntryDeleteButtons = this.defaults.showLogEntryDeleteButtons;
-
-			this.setLayout(this.defaults.layout);
-
-			// Functions whose implementations vary between subclasses
-			var init, createWindow, safeToAppend, getConsoleWindow, open;
-
-			// Configuration methods. The function scope is used to prevent
-			// direct alteration to the appender configuration properties.
-			var appenderName = inPage ? "InPageAppender" : "PopUpAppender";
-			var checkCanConfigure = function(configOptionName) {
-				if (consoleWindowCreated) {
-					handleError(appenderName + ": configuration option '" + configOptionName + "' may not be set after the appender has been initialized");
-					return false;
-				}
-				return true;
-			};
-
-			var consoleWindowExists = function() {
-				return (consoleWindowLoaded && isSupported && !consoleClosed);
-			};
-
-			this.isNewestMessageAtTop = function() { return newestMessageAtTop; };
-			this.setNewestMessageAtTop = function(newestMessageAtTopParam) {
-				newestMessageAtTop = bool(newestMessageAtTopParam);
-				if (consoleWindowExists()) {
-					getConsoleWindow().setNewestAtTop(newestMessageAtTop);
-				}
-			};
-
-			this.isScrollToLatestMessage = function() { return scrollToLatestMessage; };
-			this.setScrollToLatestMessage = function(scrollToLatestMessageParam) {
-				scrollToLatestMessage = bool(scrollToLatestMessageParam);
-				if (consoleWindowExists()) {
-					getConsoleWindow().setScrollToLatest(scrollToLatestMessage);
-				}
-			};
-
-			this.getWidth = function() { return width; };
-			this.setWidth = function(widthParam) {
-				if (checkCanConfigure("width")) {
-					width = extractStringFromParam(widthParam, width);
-				}
-			};
-
-			this.getHeight = function() { return height; };
-			this.setHeight = function(heightParam) {
-				if (checkCanConfigure("height")) {
-					height = extractStringFromParam(heightParam, height);
-				}
-			};
-
-			this.getMaxMessages = function() { return maxMessages; };
-			this.setMaxMessages = function(maxMessagesParam) {
-				maxMessages = extractIntFromParam(maxMessagesParam, maxMessages);
-				if (consoleWindowExists()) {
-					getConsoleWindow().setMaxMessages(maxMessages);
-				}
-			};
-
-			this.isShowCommandLine = function() { return showCommandLine; };
-			this.setShowCommandLine = function(showCommandLineParam) {
-				showCommandLine = bool(showCommandLineParam);
-				if (consoleWindowExists()) {
-					getConsoleWindow().setShowCommandLine(showCommandLine);
-				}
-			};
-
-			this.isShowHideButton = function() { return showHideButton; };
-			this.setShowHideButton = function(showHideButtonParam) {
-				showHideButton = bool(showHideButtonParam);
-				if (consoleWindowExists()) {
-					getConsoleWindow().setShowHideButton(showHideButton);
-				}
-			};
-
-			this.isShowCloseButton = function() { return showCloseButton; };
-			this.setShowCloseButton = function(showCloseButtonParam) {
-				showCloseButton = bool(showCloseButtonParam);
-				if (consoleWindowExists()) {
-					getConsoleWindow().setShowCloseButton(showCloseButton);
-				}
-			};
-
-			this.getCommandLineObjectExpansionDepth = function() { return commandLineObjectExpansionDepth; };
-			this.setCommandLineObjectExpansionDepth = function(commandLineObjectExpansionDepthParam) {
-				commandLineObjectExpansionDepth = extractIntFromParam(commandLineObjectExpansionDepthParam, commandLineObjectExpansionDepth);
-			};
-
-			var minimized = initiallyMinimized;
-			this.isInitiallyMinimized = function() { return initiallyMinimized; };
-			this.setInitiallyMinimized = function(initiallyMinimizedParam) {
-				if (checkCanConfigure("initiallyMinimized")) {
-					initiallyMinimized = bool(initiallyMinimizedParam);
-					minimized = initiallyMinimized;
-				}
-			};
-
-			this.isUseDocumentWrite = function() { return useDocumentWrite; };
-			this.setUseDocumentWrite = function(useDocumentWriteParam) {
-				if (checkCanConfigure("useDocumentWrite")) {
-					useDocumentWrite = bool(useDocumentWriteParam);
-				}
-			};
-
-			// Common methods
-			function QueuedLoggingEvent(loggingEvent, formattedMessage) {
-				this.loggingEvent = loggingEvent;
-				this.levelName = loggingEvent.level.name;
-				this.formattedMessage = formattedMessage;
-			}
-
-			QueuedLoggingEvent.prototype.append = function() {
-				getConsoleWindow().log(this.levelName, this.formattedMessage);
-			};
-
-			function QueuedGroup(name, initiallyExpanded) {
-				this.name = name;
-				this.initiallyExpanded = initiallyExpanded;
-			}
-
-			QueuedGroup.prototype.append = function() {
-				getConsoleWindow().group(this.name, this.initiallyExpanded);
-			};
-
-			function QueuedGroupEnd() {}
-
-			QueuedGroupEnd.prototype.append = function() {
-				getConsoleWindow().groupEnd();
-			};
-
-			var checkAndAppend = function() {
-				// Next line forces a check of whether the window has been closed
-				safeToAppend();
-				if (!initialized) {
-					init();
-				} else if (consoleClosed && reopenWhenClosed) {
-					createWindow();
-				}
-				if (safeToAppend()) {
-					appendQueuedLoggingEvents();
-				}
-			};
-
-			this.append = function(loggingEvent) {
-				if (isSupported) {
-					// Format the message
-					var formattedMessage = appender.getLayout().format(loggingEvent);
-					if (this.getLayout().ignoresThrowable()) {
-						formattedMessage += loggingEvent.getThrowableStrRep();
-					}
-					queuedLoggingEvents.push(new QueuedLoggingEvent(loggingEvent, formattedMessage));
-					checkAndAppend();
-				}
-			};
-
-            this.group = function(name, initiallyExpanded) {
-				if (isSupported) {
-					queuedLoggingEvents.push(new QueuedGroup(name, initiallyExpanded));
-					checkAndAppend();
-				}
-			};
-
-            this.groupEnd = function() {
-				if (isSupported) {
-					queuedLoggingEvents.push(new QueuedGroupEnd());
-					checkAndAppend();
-				}
-			};
-
-			var appendQueuedLoggingEvents = function() {
-				var currentLoggingEvent;
-				while (queuedLoggingEvents.length > 0) {
-					queuedLoggingEvents.shift().append();
-				}
-				if (focusConsoleWindow) {
-					getConsoleWindow().focus();
-				}
-			};
-
-			this.setAddedToLogger = function(logger) {
-				this.loggers.push(logger);
-				if (enabled && !lazyInit) {
-					init();
-				}
-			};
-
-			this.clear = function() {
-				if (consoleWindowExists()) {
-					getConsoleWindow().clearLog();
-				}
-				queuedLoggingEvents.length = 0;
-			};
-
-			this.focus = function() {
-				if (consoleWindowExists()) {
-					getConsoleWindow().focus();
-				}
-			};
-
-			this.focusCommandLine = function() {
-				if (consoleWindowExists()) {
-					getConsoleWindow().focusCommandLine();
-				}
-			};
-
-			this.focusSearch = function() {
-				if (consoleWindowExists()) {
-					getConsoleWindow().focusSearch();
-				}
-			};
-
-			var commandWindow = window;
-
-			this.getCommandWindow = function() { return commandWindow; };
-			this.setCommandWindow = function(commandWindowParam) {
-				commandWindow = commandWindowParam;
-			};
-
-			this.executeLastCommand = function() {
-				if (consoleWindowExists()) {
-					getConsoleWindow().evalLastCommand();
-				}
-			};
-
-			var commandLayout = new PatternLayout("%m");
-			this.getCommandLayout = function() { return commandLayout; };
-			this.setCommandLayout = function(commandLayoutParam) {
-				commandLayout = commandLayoutParam;
-			};
-
-			this.evalCommandAndAppend = function(expr) {
-				var commandReturnValue = { appendResult: true, isError: false };
-				var commandOutput = "";
-				// Evaluate the command
-				try {
-					var result, i;
-					// The next three lines constitute a workaround for IE. Bizarrely, iframes seem to have no
-					// eval method on the window object initially, but once execScript has been called on
-					// it once then the eval method magically appears. See http://www.thismuchiknow.co.uk/?p=25
-					if (!commandWindow.eval && commandWindow.execScript) {
-						commandWindow.execScript("null");
-					}
-
-					var commandLineFunctionsHash = {};
-					for (i = 0, len = commandLineFunctions.length; i < len; i++) {
-						commandLineFunctionsHash[commandLineFunctions[i][0]] = commandLineFunctions[i][1];
-					}
-
-					// Keep an array of variables that are being changed in the command window so that they
-					// can be restored to their original values afterwards
-					var objectsToRestore = [];
-					var addObjectToRestore = function(name) {
-						objectsToRestore.push([name, commandWindow[name]]);
-					};
-
-					addObjectToRestore("appender");
-					commandWindow.appender = appender;
-
-					addObjectToRestore("commandReturnValue");
-					commandWindow.commandReturnValue = commandReturnValue;
-
-					addObjectToRestore("commandLineFunctionsHash");
-					commandWindow.commandLineFunctionsHash = commandLineFunctionsHash;
-
-					var addFunctionToWindow = function(name) {
-						addObjectToRestore(name);
-						commandWindow[name] = function() {
-							return this.commandLineFunctionsHash[name](appender, arguments, commandReturnValue);
-						};
-					};
-
-					for (i = 0, len = commandLineFunctions.length; i < len; i++) {
-						addFunctionToWindow(commandLineFunctions[i][0]);
-					}
-
-					// Another bizarre workaround to get IE to eval in the global scope
-					if (commandWindow === window && commandWindow.execScript) {
-						addObjectToRestore("evalExpr");
-						addObjectToRestore("result");
-						window.evalExpr = expr;
-						commandWindow.execScript("window.result=eval(window.evalExpr);");
-						result = window.result;
- 					} else {
- 						result = commandWindow.eval(expr);
- 					}
-					commandOutput = isUndefined(result) ? result : formatObjectExpansion(result, commandLineObjectExpansionDepth);
-
-					// Restore variables in the command window to their original state
-					for (i = 0, len = objectsToRestore.length; i < len; i++) {
-						commandWindow[objectsToRestore[i][0]] = objectsToRestore[i][1];
-					}
-				} catch (ex) {
-					commandOutput = "Error evaluating command: " + getExceptionStringRep(ex);
-					commandReturnValue.isError = true;
-				}
-				// Append command output
-				if (commandReturnValue.appendResult) {
-					var message = ">>> " + expr;
-					if (!isUndefined(commandOutput)) {
-						message += newLine + commandOutput;
-					}
-					var level = commandReturnValue.isError ? Level.ERROR : Level.INFO;
-					var loggingEvent = new LoggingEvent(null, new Date(), level, [message], null);
-					var mainLayout = this.getLayout();
-					this.setLayout(commandLayout);
-					this.append(loggingEvent);
-					this.setLayout(mainLayout);
-				}
-			};
-
-			var commandLineFunctions = defaultCommandLineFunctions.concat([]);
-
-			this.addCommandLineFunction = function(functionName, commandLineFunction) {
-				commandLineFunctions.push([functionName, commandLineFunction]);
-			};
-
-			var commandHistoryCookieName = "log4javascriptCommandHistory";
-			this.storeCommandHistory = function(commandHistory) {
-				setCookie(commandHistoryCookieName, commandHistory.join(","));
-			};
-
-			var writeHtml = function(doc) {
-				var lines = getConsoleHtmlLines();
-				doc.open();
-				for (var i = 0, len = lines.length; i < len; i++) {
-					doc.writeln(lines[i]);
-				}
-				doc.close();
-			};
-
-			// Set up event listeners
-			this.setEventTypes(["load", "unload"]);
-
-			var consoleWindowLoadHandler = function() {
-				var win = getConsoleWindow();
-				win.setAppender(appender);
-				win.setNewestAtTop(newestMessageAtTop);
-				win.setScrollToLatest(scrollToLatestMessage);
-				win.setMaxMessages(maxMessages);
-				win.setShowCommandLine(showCommandLine);
-				win.setShowHideButton(showHideButton);
-				win.setShowCloseButton(showCloseButton);
-				win.setMainWindow(window);
-
-				// Restore command history stored in cookie
-				var storedValue = getCookie(commandHistoryCookieName);
-				if (storedValue) {
-					win.commandHistory = storedValue.split(",");
-					win.currentCommandIndex = win.commandHistory.length;
-				}
-
-				appender.dispatchEvent("load", { "win" : win });
-			};
-
-			this.unload = function() {
-				logLog.debug("unload " + this + ", caller: " + this.unload.caller);
-				if (!consoleClosed) {
-					logLog.debug("really doing unload " + this);
-					consoleClosed = true;
-					consoleWindowLoaded = false;
-					consoleWindowCreated = false;
-					appender.dispatchEvent("unload", {});
-				}
-			};
-
-			var pollConsoleWindow = function(windowTest, interval, successCallback, errorMessage) {
-				function doPoll() {
-					try {
-						// Test if the console has been closed while polling
-						if (consoleClosed) {
-							clearInterval(poll);
-						}
-						if (windowTest(getConsoleWindow())) {
-							clearInterval(poll);
-							successCallback();
-						}
-					} catch (ex) {
-						clearInterval(poll);
-						isSupported = false;
-						handleError(errorMessage, ex);
-					}
-				}
-
-				// Poll the pop-up since the onload event is not reliable
-				var poll = setInterval(doPoll, interval);
-			};
-
-			var getConsoleUrl = function() {
-				var documentDomainSet = (document.domain != location.hostname);
-				return useDocumentWrite ? "" : getBaseUrl() + "console_uncompressed.html" +
-											   (documentDomainSet ? "?log4javascript_domain=" + escape(document.domain) : "");
-			};
-
-			// Define methods and properties that vary between subclasses
-			if (inPage) {
-				// InPageAppender
-
-				var containerElement = null;
-
-				// Configuration methods. The function scope is used to prevent
-				// direct alteration to the appender configuration properties.
-				var cssProperties = [];
-				this.addCssProperty = function(name, value) {
-					if (checkCanConfigure("cssProperties")) {
-						cssProperties.push([name, value]);
-					}
-				};
-
-				// Define useful variables
-				var windowCreationStarted = false;
-				var iframeContainerDiv;
-				var iframeId = uniqueId + "_InPageAppender_" + consoleAppenderId;
-
-				this.hide = function() {
-					if (initialized && consoleWindowCreated) {
-						if (consoleWindowExists()) {
-							getConsoleWindow().$("command").blur();
-						}
-						iframeContainerDiv.style.display = "none";
-						minimized = true;
-					}
-				};
-
-				this.show = function() {
-					if (initialized) {
-						if (consoleWindowCreated) {
-							iframeContainerDiv.style.display = "block";
-							this.setShowCommandLine(showCommandLine); // Force IE to update
-							minimized = false;
-						} else if (!windowCreationStarted) {
-							createWindow(true);
-						}
-					}
-				};
-
-				this.isVisible = function() {
-					return !minimized && !consoleClosed;
-				};
-
-				this.close = function(fromButton) {
-					if (!consoleClosed && (!fromButton || confirm("This will permanently remove the console from the page. No more messages will be logged. Do you wish to continue?"))) {
-						iframeContainerDiv.parentNode.removeChild(iframeContainerDiv);
-						this.unload();
-					}
-				};
-
-				// Create open, init, getConsoleWindow and safeToAppend functions
-				open = function() {
-					var initErrorMessage = "InPageAppender.open: unable to create console iframe";
-
-					function finalInit() {
-						try {
-							if (!initiallyMinimized) {
-								appender.show();
-							}
-							consoleWindowLoadHandler();
-							consoleWindowLoaded = true;
-							appendQueuedLoggingEvents();
-						} catch (ex) {
-							isSupported = false;
-							handleError(initErrorMessage, ex);
-						}
-					}
-
-					function writeToDocument() {
-						try {
-							var windowTest = function(win) { return isLoaded(win); };
-							if (useDocumentWrite) {
-								writeHtml(getConsoleWindow().document);
-							}
-							if (windowTest(getConsoleWindow())) {
-								finalInit();
-							} else {
-								pollConsoleWindow(windowTest, 100, finalInit, initErrorMessage);
-							}
-						} catch (ex) {
-							isSupported = false;
-							handleError(initErrorMessage, ex);
-						}
-					}
-
-					minimized = false;
-					iframeContainerDiv = containerElement.appendChild(document.createElement("div"));
-
-					iframeContainerDiv.style.width = width;
-					iframeContainerDiv.style.height = height;
-					iframeContainerDiv.style.border = "solid gray 1px";
-
-					for (var i = 0, len = cssProperties.length; i < len; i++) {
-						iframeContainerDiv.style[cssProperties[i][0]] = cssProperties[i][1];
-					}
-
-					var iframeSrc = useDocumentWrite ? "" : " src='" + getConsoleUrl() + "'";
-
-					// Adding an iframe using the DOM would be preferable, but it doesn't work
-					// in IE5 on Windows, or in Konqueror prior to version 3.5 - in Konqueror
-					// it creates the iframe fine but I haven't been able to find a way to obtain
-					// the iframe's window object
-					iframeContainerDiv.innerHTML = "<iframe id='" + iframeId + "' name='" + iframeId +
-						"' width='100%' height='100%' frameborder='0'" + iframeSrc +
-						" scrolling='no'></iframe>";
-					consoleClosed = false;
-
-					// Write the console HTML to the iframe
-					var iframeDocumentExistsTest = function(win) {
-						try {
-							return bool(win) && bool(win.document);
-						} catch (ex) {
-							return false;
-						}
-					};
-					if (iframeDocumentExistsTest(getConsoleWindow())) {
-						writeToDocument();
-					} else {
-						pollConsoleWindow(iframeDocumentExistsTest, 100, writeToDocument, initErrorMessage);
-					}
-					consoleWindowCreated = true;
-				};
-
-				createWindow = function(show) {
-					if (show || !initiallyMinimized) {
-						var pageLoadHandler = function() {
-							if (!container) {
-								// Set up default container element
-								containerElement = document.createElement("div");
-								containerElement.style.position = "fixed";
-								containerElement.style.left = "0";
-								containerElement.style.right = "0";
-								containerElement.style.bottom = "0";
-								document.body.appendChild(containerElement);
-								appender.addCssProperty("borderWidth", "1px 0 0 0");
-								appender.addCssProperty("zIndex", 1000000); // Can't find anything authoritative that says how big z-index can be
-								open();
-							} else {
-								try {
-									var el = document.getElementById(container);
-									if (el.nodeType == 1) {
-										containerElement = el;
-									}
-									open();
-								} catch (ex) {
-									handleError("InPageAppender.init: invalid container element '" + container + "' supplied", ex);
-								}
-							}
-						};
-
-						// Test the type of the container supplied. First, check if it's an element
-						if (pageLoaded && container && container.appendChild) {
-							containerElement = container;
-							open();
-						} else if (pageLoaded) {
-							pageLoadHandler();
-						} else {
-							log4javascript.addEventListener("load", pageLoadHandler);
-						}
-						windowCreationStarted = true;
-					}
-				};
-
-				init = function() {
-					createWindow();
-					initialized = true;
-				};
-
-				getConsoleWindow = function() {
-					var iframe = window.frames[iframeId];
-					if (iframe) {
-						return iframe;
-					}
-				};
-
-				safeToAppend = function() {
-					if (isSupported && !consoleClosed) {
-						if (consoleWindowCreated && !consoleWindowLoaded && getConsoleWindow() && isLoaded(getConsoleWindow())) {
-							consoleWindowLoaded = true;
-						}
-						return consoleWindowLoaded;
-					}
-					return false;
-				};
-			} else {
-				// PopUpAppender
-
-				// Extract params
-				var useOldPopUp = appender.defaults.useOldPopUp;
-				var complainAboutPopUpBlocking = appender.defaults.complainAboutPopUpBlocking;
-				var reopenWhenClosed = this.defaults.reopenWhenClosed;
-
-				// Configuration methods. The function scope is used to prevent
-				// direct alteration to the appender configuration properties.
-				this.isUseOldPopUp = function() { return useOldPopUp; };
-				this.setUseOldPopUp = function(useOldPopUpParam) {
-					if (checkCanConfigure("useOldPopUp")) {
-						useOldPopUp = bool(useOldPopUpParam);
-					}
-				};
-
-				this.isComplainAboutPopUpBlocking = function() { return complainAboutPopUpBlocking; };
-				this.setComplainAboutPopUpBlocking = function(complainAboutPopUpBlockingParam) {
-					if (checkCanConfigure("complainAboutPopUpBlocking")) {
-						complainAboutPopUpBlocking = bool(complainAboutPopUpBlockingParam);
-					}
-				};
-
-				this.isFocusPopUp = function() { return focusConsoleWindow; };
-				this.setFocusPopUp = function(focusPopUpParam) {
-					// This property can be safely altered after logging has started
-					focusConsoleWindow = bool(focusPopUpParam);
-				};
-
-				this.isReopenWhenClosed = function() { return reopenWhenClosed; };
-				this.setReopenWhenClosed = function(reopenWhenClosedParam) {
-					// This property can be safely altered after logging has started
-					reopenWhenClosed = bool(reopenWhenClosedParam);
-				};
-
-				this.close = function() {
-					logLog.debug("close " + this);
-					try {
-						popUp.close();
-						this.unload();
-					} catch (ex) {
-						// Do nothing
-					}
-				};
-
-				this.hide = function() {
-					logLog.debug("hide " + this);
-					if (consoleWindowExists()) {
-						this.close();
-					}
-				};
-
-				this.show = function() {
-					logLog.debug("show " + this);
-					if (!consoleWindowCreated) {
-						open();
-					}
-				};
-
-				this.isVisible = function() {
-					return safeToAppend();
-				};
-
-				// Define useful variables
-				var popUp;
-
-				// Create open, init, getConsoleWindow and safeToAppend functions
-				open = function() {
-					var windowProperties = "width=" + width + ",height=" + height + ",status,resizable";
-					var windowName = "PopUp_" + location.host.replace(/[^a-z0-9]/gi, "_") + "_" + consoleAppenderId;
-					if (!useOldPopUp || !useDocumentWrite) {
-						// Ensure a previous window isn't used by using a unique name
-						windowName = windowName + "_" + uniqueId;
-					}
-
-					var checkPopUpClosed = function(win) {
-						if (consoleClosed) {
-							return true;
-						} else {
-							try {
-								return bool(win) && win.closed;
-							} catch(ex) {}
-						}
-						return false;
-					};
-
-					var popUpClosedCallback = function() {
-						if (!consoleClosed) {
-							appender.unload();
-						}
-					};
-
-					function finalInit() {
-						getConsoleWindow().setCloseIfOpenerCloses(!useOldPopUp || !useDocumentWrite);
-						consoleWindowLoadHandler();
-						consoleWindowLoaded = true;
-						appendQueuedLoggingEvents();
-						pollConsoleWindow(checkPopUpClosed, 500, popUpClosedCallback,
-								"PopUpAppender.checkPopUpClosed: error checking pop-up window");
-					}
-
-					try {
-						popUp = window.open(getConsoleUrl(), windowName, windowProperties);
-						consoleClosed = false;
-						consoleWindowCreated = true;
-						if (popUp && popUp.document) {
-							if (useDocumentWrite && useOldPopUp && isLoaded(popUp)) {
-								popUp.mainPageReloaded();
-								finalInit();
-							} else {
-								if (useDocumentWrite) {
-									writeHtml(popUp.document);
-								}
-								// Check if the pop-up window object is available
-								var popUpLoadedTest = function(win) { return bool(win) && isLoaded(win); };
-								if (isLoaded(popUp)) {
-									finalInit();
-								} else {
-									pollConsoleWindow(popUpLoadedTest, 100, finalInit,
-											"PopUpAppender.init: unable to create console window");
-								}
-							}
-						} else {
-							isSupported = false;
-							logLog.warn("PopUpAppender.init: pop-ups blocked, please unblock to use PopUpAppender");
-							if (complainAboutPopUpBlocking) {
-								handleError("log4javascript: pop-up windows appear to be blocked. Please unblock them to use pop-up logging.");
-							}
-						}
-					} catch (ex) {
-						handleError("PopUpAppender.init: error creating pop-up", ex);
-					}
-				};
-
-				createWindow = function() {
-					if (!initiallyMinimized) {
-						open();
-					}
-				};
-
-				init = function() {
-					createWindow();
-					initialized = true;
-				};
-
-				getConsoleWindow = function() {
-					return popUp;
-				};
-
-				safeToAppend = function() {
-					if (isSupported && !isUndefined(popUp) && !consoleClosed) {
-						if (popUp.closed ||
-								(consoleWindowLoaded && isUndefined(popUp.closed))) { // Extra check for Opera
-							appender.unload();
-							logLog.debug("PopUpAppender: pop-up closed");
-							return false;
-						}
-						if (!consoleWindowLoaded && isLoaded(popUp)) {
-							consoleWindowLoaded = true;
-						}
-					}
-					return isSupported && consoleWindowLoaded && !consoleClosed;
-				};
-			}
-
-			// Expose getConsoleWindow so that automated tests can check the DOM
-			this.getConsoleWindow = getConsoleWindow;
-		};
-
-		ConsoleAppender.addGlobalCommandLineFunction = function(functionName, commandLineFunction) {
-			defaultCommandLineFunctions.push([functionName, commandLineFunction]);
-		};
-
-		/* ------------------------------------------------------------------ */
-
-		function PopUpAppender(lazyInit, initiallyMinimized, useDocumentWrite,
-							   width, height) {
-			this.create(false, null, lazyInit, initiallyMinimized,
-					useDocumentWrite, width, height, this.defaults.focusPopUp);
-		}
-
-		PopUpAppender.prototype = new ConsoleAppender();
-
-		PopUpAppender.prototype.defaults = {
-			layout: new PatternLayout("%d{HH:mm:ss} %-5p - %m{1}%n"),
-			initiallyMinimized: false,
-			focusPopUp: false,
-			lazyInit: true,
-			useOldPopUp: true,
-			complainAboutPopUpBlocking: true,
-			newestMessageAtTop: false,
-			scrollToLatestMessage: true,
-			width: "600",
-			height: "400",
-			reopenWhenClosed: false,
-			maxMessages: null,
-			showCommandLine: true,
-			commandLineObjectExpansionDepth: 1,
-			showHideButton: false,
-			showCloseButton: true,
-            showLogEntryDeleteButtons: true,
-            useDocumentWrite: true
-		};
-
-		PopUpAppender.prototype.toString = function() {
-			return "PopUpAppender";
-		};
-
-		log4javascript.PopUpAppender = PopUpAppender;
-
-		/* ------------------------------------------------------------------ */
-
-		function InPageAppender(container, lazyInit, initiallyMinimized,
-								useDocumentWrite, width, height) {
-			this.create(true, container, lazyInit, initiallyMinimized,
-					useDocumentWrite, width, height, false);
-		}
-
-		InPageAppender.prototype = new ConsoleAppender();
-
-		InPageAppender.prototype.defaults = {
-			layout: new PatternLayout("%d{HH:mm:ss} %-5p - %m{1}%n"),
-			initiallyMinimized: false,
-			lazyInit: true,
-			newestMessageAtTop: false,
-			scrollToLatestMessage: true,
-			width: "100%",
-			height: "220px",
-			maxMessages: null,
-			showCommandLine: true,
-			commandLineObjectExpansionDepth: 1,
-			showHideButton: false,
-			showCloseButton: false,
-            showLogEntryDeleteButtons: true,
-            useDocumentWrite: true
-		};
-
-		InPageAppender.prototype.toString = function() {
-			return "InPageAppender";
-		};
-
-		log4javascript.InPageAppender = InPageAppender;
-
-		// Next line for backwards compatibility
-		log4javascript.InlineAppender = InPageAppender;
-	})();
-	/* ---------------------------------------------------------------------- */
-	// Console extension functions
-
-	function padWithSpaces(str, len) {
-		if (str.length < len) {
-			var spaces = [];
-			var numberOfSpaces = Math.max(0, len - str.length);
-			for (var i = 0; i < numberOfSpaces; i++) {
-				spaces[i] = " ";
-			}
-			str += spaces.join("");
-		}
-		return str;
-	}
-
-	(function() {
-		function dir(obj) {
-			var maxLen = 0;
-			// Obtain the length of the longest property name
-			for (var p in obj) {
-				maxLen = Math.max(toStr(p).length, maxLen);
-			}
-			// Create the nicely formatted property list
-			var propList = [];
-			for (p in obj) {
-				var propNameStr = "  " + padWithSpaces(toStr(p), maxLen + 2);
-				var propVal;
-				try {
-					propVal = splitIntoLines(toStr(obj[p])).join(padWithSpaces(newLine, maxLen + 6));
-				} catch (ex) {
-					propVal = "[Error obtaining property. Details: " + getExceptionMessage(ex) + "]";
-				}
-				propList.push(propNameStr + propVal);
-			}
-			return propList.join(newLine);
-		}
-
-		var nodeTypes = {
-			ELEMENT_NODE: 1,
-			ATTRIBUTE_NODE: 2,
-			TEXT_NODE: 3,
-			CDATA_SECTION_NODE: 4,
-			ENTITY_REFERENCE_NODE: 5,
-			ENTITY_NODE: 6,
-			PROCESSING_INSTRUCTION_NODE: 7,
-			COMMENT_NODE: 8,
-			DOCUMENT_NODE: 9,
-			DOCUMENT_TYPE_NODE: 10,
-			DOCUMENT_FRAGMENT_NODE: 11,
-			NOTATION_NODE: 12
-		};
-
-		var preFormattedElements = ["script", "pre"];
-
-		// This should be the definitive list, as specified by the XHTML 1.0 Transitional DTD
-		var emptyElements = ["br", "img", "hr", "param", "link", "area", "input", "col", "base", "meta"];
-		var indentationUnit = "  ";
-
-		// Create and return an XHTML string from the node specified
-		function getXhtml(rootNode, includeRootNode, indentation, startNewLine, preformatted) {
-			includeRootNode = (typeof includeRootNode == "undefined") ? true : !!includeRootNode;
-			if (typeof indentation != "string") {
-				indentation = "";
-			}
-			startNewLine = !!startNewLine;
-			preformatted = !!preformatted;
-			var xhtml;
-
-			function isWhitespace(node) {
-				return ((node.nodeType == nodeTypes.TEXT_NODE) && /^[ \t\r\n]*$/.test(node.nodeValue));
-			}
-
-			function fixAttributeValue(attrValue) {
-				return attrValue.toString().replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
-			}
-
-			function getStyleAttributeValue(el) {
-				var stylePairs = el.style.cssText.split(";");
-				var styleValue = "";
-				var isFirst = true;
-				for (var j = 0, len = stylePairs.length; j < len; j++) {
-					var nameValueBits = stylePairs[j].split(":");
-					var props = [];
-					if (!/^\s*$/.test(nameValueBits[0])) {
-						props.push(trim(nameValueBits[0]).toLowerCase() + ":" + trim(nameValueBits[1]));
-					}
-					styleValue = props.join(";");
-				}
-				return styleValue;
-			}
-
-			function getNamespace(el) {
-				if (el.prefix) {
-					return el.prefix;
-				} else if (el.outerHTML) {
-					var regex = new RegExp("<([^:]+):" + el.tagName + "[^>]*>", "i");
-					if (regex.test(el.outerHTML)) {
-						return RegExp.$1.toLowerCase();
-					}
-				}
-                return "";
-			}
-
-			var lt = "<";
-			var gt = ">";
-
-			if (includeRootNode && rootNode.nodeType != nodeTypes.DOCUMENT_FRAGMENT_NODE) {
-				switch (rootNode.nodeType) {
-					case nodeTypes.ELEMENT_NODE:
-						var tagName = rootNode.tagName.toLowerCase();
-						xhtml = startNewLine ? newLine + indentation : "";
-						xhtml += lt;
-						// Allow for namespaces, where present
-						var prefix = getNamespace(rootNode);
-						var hasPrefix = !!prefix;
-						if (hasPrefix) {
-							xhtml += prefix + ":";
-						}
-						xhtml += tagName;
-						for (i = 0, len = rootNode.attributes.length; i < len; i++) {
-							var currentAttr = rootNode.attributes[i];
-							// Check the attribute is valid.
-							if (!	currentAttr.specified ||
-									currentAttr.nodeValue === null ||
-									currentAttr.nodeName.toLowerCase() === "style" ||
-									typeof currentAttr.nodeValue !== "string" ||
-									currentAttr.nodeName.indexOf("_moz") === 0) {
-								continue;
-							}
-							xhtml += " " + currentAttr.nodeName.toLowerCase() + "=\"";
-							xhtml += fixAttributeValue(currentAttr.nodeValue);
-							xhtml += "\"";
-						}
-						// Style needs to be done separately as it is not reported as an
-						// attribute in IE
-						if (rootNode.style.cssText) {
-							var styleValue = getStyleAttributeValue(rootNode);
-							if (styleValue !== "") {
-								xhtml += " style=\"" + getStyleAttributeValue(rootNode) + "\"";
-							}
-						}
-						if (array_contains(emptyElements, tagName) ||
-								(hasPrefix && !rootNode.hasChildNodes())) {
-							xhtml += "/" + gt;
-						} else {
-							xhtml += gt;
-							// Add output for childNodes collection (which doesn't include attribute nodes)
-							var childStartNewLine = !(rootNode.childNodes.length === 1 &&
-								rootNode.childNodes[0].nodeType === nodeTypes.TEXT_NODE);
-							var childPreformatted = array_contains(preFormattedElements, tagName);
-							for (var i = 0, len = rootNode.childNodes.length; i < len; i++) {
-								xhtml += getXhtml(rootNode.childNodes[i], true, indentation + indentationUnit,
-									childStartNewLine, childPreformatted);
-							}
-							// Add the end tag
-							var endTag = lt + "/" + tagName + gt;
-							xhtml += childStartNewLine ? newLine + indentation + endTag : endTag;
-						}
-						return xhtml;
-					case nodeTypes.TEXT_NODE:
-						if (isWhitespace(rootNode)) {
-							xhtml = "";
-						} else {
-							if (preformatted) {
-								xhtml = rootNode.nodeValue;
-							} else {
-								// Trim whitespace from each line of the text node
-								var lines = splitIntoLines(trim(rootNode.nodeValue));
-								var trimmedLines = [];
-								for (var i = 0, len = lines.length; i < len; i++) {
-									trimmedLines[i] = trim(lines[i]);
-								}
-								xhtml = trimmedLines.join(newLine + indentation);
-							}
-							if (startNewLine) {
-								xhtml = newLine + indentation + xhtml;
-							}
-						}
-						return xhtml;
-					case nodeTypes.CDATA_SECTION_NODE:
-						return "<![CDA" + "TA[" + rootNode.nodeValue + "]" + "]>" + newLine;
-					case nodeTypes.DOCUMENT_NODE:
-						xhtml = "";
-						// Add output for childNodes collection (which doesn't include attribute nodes)
-						for (var i = 0, len = rootNode.childNodes.length; i < len; i++) {
-							xhtml += getXhtml(rootNode.childNodes[i], true, indentation);
-						}
-						return xhtml;
-					default:
-						return "";
-				}
-			} else {
-				xhtml = "";
-				// Add output for childNodes collection (which doesn't include attribute nodes)
-				for (var i = 0, len = rootNode.childNodes.length; i < len; i++) {
-					xhtml += getXhtml(rootNode.childNodes[i], true, indentation + indentationUnit);
-				}
-				return xhtml;
-			}
-		}
-
-		function createCommandLineFunctions() {
-			ConsoleAppender.addGlobalCommandLineFunction("$", function(appender, args, returnValue) {
-				return document.getElementById(args[0]);
-			});
-
-			ConsoleAppender.addGlobalCommandLineFunction("dir", function(appender, args, returnValue) {
-				var lines = [];
-				for (var i = 0, len = args.length; i < len; i++) {
-					lines[i] = dir(args[i]);
-				}
-				return lines.join(newLine + newLine);
-			});
-
-			ConsoleAppender.addGlobalCommandLineFunction("dirxml", function(appender, args, returnValue) {
-				var lines = [];
-				for (var i = 0, len = args.length; i < len; i++) {
-					var win = appender.getCommandWindow();
-					lines[i] = getXhtml(args[i]);
-				}
-				return lines.join(newLine + newLine);
-			});
-
-			ConsoleAppender.addGlobalCommandLineFunction("cd", function(appender, args, returnValue) {
-				var win, message;
-				if (args.length === 0 || args[0] === "") {
-					win = window;
-					message = "Command line set to run in main window";
-				} else {
-					if (args[0].window == args[0]) {
-						win = args[0];
-						message = "Command line set to run in frame '" + args[0].name + "'";
-					} else {
-						win = window.frames[args[0]];
-						if (win) {
-							message = "Command line set to run in frame '" + args[0] + "'";
-						} else {
-							returnValue.isError = true;
-							message = "Frame '" + args[0] + "' does not exist";
-							win = appender.getCommandWindow();
-						}
-					}
-				}
-				appender.setCommandWindow(win);
-				return message;
-			});
-
-			ConsoleAppender.addGlobalCommandLineFunction("clear", function(appender, args, returnValue) {
-				returnValue.appendResult = false;
-				appender.clear();
-			});
-
-			ConsoleAppender.addGlobalCommandLineFunction("keys", function(appender, args, returnValue) {
-				var keys = [];
-				for (var k in args[0]) {
-					keys.push(k);
-				}
-				return keys;
-			});
-
-			ConsoleAppender.addGlobalCommandLineFunction("values", function(appender, args, returnValue) {
-				var values = [];
-				for (var k in args[0]) {
-					try {
-						values.push(args[0][k]);
-					} catch (ex) {
-						logLog.warn("values(): Unable to obtain value for key " + k + ". Details: " + getExceptionMessage(ex));
-					}
-				}
-				return values;
-			});
-
-			ConsoleAppender.addGlobalCommandLineFunction("expansionDepth", function(appender, args, returnValue) {
-				var expansionDepth = parseInt(args[0], 10);
-				if (isNaN(expansionDepth) || expansionDepth < 0) {
-					returnValue.isError = true;
-					return "" + args[0] + " is not a valid expansion depth";
-				} else {
-					appender.setCommandLineObjectExpansionDepth(expansionDepth);
-					return "Object expansion depth set to " + expansionDepth;
-				}
-			});
-		}
-
-		function init() {
-			// Add command line functions
-			createCommandLineFunctions();
-		}
-
-		/* ------------------------------------------------------------------ */
-
-		init();
-	})();
-
-	/* ---------------------------------------------------------------------- */
-	// Main load
-
-   log4javascript.setDocumentReady = function() {
-       pageLoaded = true;
-       log4javascript.dispatchEvent("load", {});
-   };
-
-    if (window.addEventListener) {
-        window.addEventListener("load", log4javascript.setDocumentReady, false);
-    } else if (window.attachEvent) {
-        window.attachEvent("onload", log4javascript.setDocumentReady);
-    } else {
-        var oldOnload = window.onload;
-        if (typeof window.onload != "function") {
-            window.onload = log4javascript.setDocumentReady;
-        } else {
-            window.onload = function(evt) {
-                if (oldOnload) {
-                    oldOnload(evt);
-                }
-                log4javascript.setDocumentReady();
-            };
-        }
-    }
-
-    // Ensure that the log4javascript object is available in the window. This
-    // is necessary for log4javascript to be available in IE if loaded using
-    // Dojo's module system
-    window.log4javascript = log4javascript;
-
-    return log4javascript;
-})();
-define("log4javascript", function(){});
-
-define('logging',[
-    "jquery",
-    "log4javascript"
-], function($) {
-    var l4js = log4javascript,
-        rootname = 'patterns',
-        root = l4js.getLogger(rootname),
-        log = l4js.getLogger(rootname + '.logging');
-
-    // default log level mapping
-    //
-    // you can override these via the url search parameter:
-    // foo.html?patterns-log-level=WARN&patterns-log-level-inject=DEBUG
-    //
-    var LEVELMAP = {
-        patterns: l4js.Level.INFO
-        //"patterns.inject": l4js.Level.DEBUG
-    };
-    var loglevelFromUrl = function() {
-        // check URL for loglevel config
-        var loglevel_re =/patterns-log-level-?([^=]*)=([^&]+)/g,
-            level, name, m;
-        while (true) {
-            m = loglevel_re.exec(window.location.search);
-            if (!m)
-                break;
-            name = rootname + (m[1] ? '.' + m[1] : "");
-            level = m[2].toUpperCase();
-            if (!l4js.Level[level])
-                log.warn('Unknown log level:', level, m);
+    ConsoleWriter.prototype = {
+        output: function(log_name, level, messages) {
+            if (log_name)
+                messages.unshift(log_name+":");
+            if (level<=Level.DEBUG) {
+                // console.debug exists but is deprecated
+                messages.unshift("[DEBUG]");
+                console.log.apply(console, messages);
+            } else if (level<=Level.INFO)
+                console.info.apply(console, messages);
+            else if (level<=Level.WARN)
+                console.warn.apply(console, messages);
             else
-                LEVELMAP[name] = l4js.Level[level];
+                console.error.apply(console, messages);
         }
     };
-    loglevelFromUrl();
-    root.setLevel(LEVELMAP[rootname]);
 
-    var init_console_logging = function() {
-        // enable/disable all logging
-        l4js.setEnabled(true);
 
-        var bca = new l4js.BrowserConsoleAppender();
-        root.addAppender(bca);
+    function Logger(name, parent) {
+        this._loggers={};
+        this.name=name || "";
+        this._parent=parent || null;
+        if (!parent) {
+            this._enabled=true;
+            this._level=Level.WARN;
+        }
+    }
 
-        var Layout = function() {
-            this.customFields = [];
-            this.layout_noobjects = new l4js.PatternLayout('%p %c: %m');
-            this.layout_objects = new l4js.PatternLayout('%p %c:');
-        };
-        Layout.prototype = new l4js.Layout();
-        Layout.prototype.format = function(loggingEvent) {
-            var hasobjects = false;
-            loggingEvent.messages = $.map(loggingEvent.messages, function(item) {
-                if ($.isPlainObject(item)) hasobjects = true;
-                if (item && item.jquery) {
-                    hasobjects = true;
-                    item = item.clone();
-                }
-                return item;
-            });
-            if (hasobjects) {
-                var prefix = this.layout_objects.format(loggingEvent);
-                loggingEvent.messages.unshift(prefix);
-                return loggingEvent.messages;
-            } else {
-                return this.layout_noobjects.format(loggingEvent);
+    Logger.prototype = {
+        getLogger: function(name) {
+            var path = name.split("."),
+                root = this,
+                route = this.name ? [this.name] : [];
+            while (path.length) {
+                var entry = path.shift();
+                route.push(entry);
+                if (!(entry in root._loggers))
+                    root._loggers[entry] = new Logger(route.join("."), root);
+                root=root._loggers[entry];
             }
-        };
-        Layout.prototype.ignoresThrowable = function() {
-            return true;
-        };
-        Layout.prototype.toString = function() {
-            return "NullLayout";
-        };
+            return root;
+        },
 
-        var layout = new Layout();
-        bca.setLayout(layout);
-    };
+        _getFlag: function(flag) {
+            var context=this;
+            flag="_"+flag;
+            while (context!==null) {
+                if (context[flag]!==undefined)
+                    return context[flag];
+                context=context._parent;
+            }
+            return null;
+        },
 
-    init_console_logging();
+        setEnabled: function(state) {
+            this._enabled=!!state;
+        },
 
-    var logging = {
-        Level: l4js.Level,
-
-        setEnabled: function(enabled) {
-            l4js.setEnabled(enabled);
+        isEnabled: function() {
+            this._getFlag("enabled");
         },
 
         setLevel: function(level) {
-            root.setLevel(level);
+            if (typeof level==="number")
+                this._level=level;
+            else if (typeof level==="string") {
+                level=level.toUpperCase();
+                if (level in Level)
+                    this._level=Level[level];
+            }
         },
 
-        // XXX: get this into l4js:
-        // logging.getLogger("foo").getLogger("bar").getLogger("baz");
-        getLogger: function(name) {
-            var logname = rootname + (name ? '.' + name : ''),
-                log = l4js.getLogger(logname),
-                level = LEVELMAP[logname];
-            if (level)
-                log.setLevel(level);
-            return log;
+        getLevel: function() {
+            return this._getFlag("level");
+        },
+
+        log: function(level, messages) {
+            if (!messages.length || !this._getFlag("enabled") || level<this._getFlag("level"))
+                return;
+            messages=Array.prototype.slice.call(messages);
+            writer.output(this.name, level, messages);
+        },
+
+        debug: function() {
+            this.log(Level.DEBUG, arguments);
+        },
+
+        info: function() {
+            this.log(Level.INFO, arguments);
+        },
+
+        warn: function() {
+            this.log(Level.WARN, arguments);
+        },
+
+        error: function() {
+            this.log(Level.ERROR, arguments);
+        },
+
+        fatal: function() {
+            this.log(Level.FATAL, arguments);
         }
     };
 
+    function getWriter() {
+        return writer;
+    }
 
-    return logging;
+    function setWriter(w) {
+        writer=w;
+    }
+
+    if (window.console && window.console.log && window.console.log.apply!==undefined)
+        setWriter(new ConsoleWriter());
+    else
+        setWriter(new IEConsoleWriter());
+
+    root=new Logger();
+
+    var logconfig = /loglevel(|-[^=]+)=([^&]+)/g,
+        match;
+
+    while ((match=logconfig.exec(window.location.search))!==null) {
+        var logger = (match[1]==="") ? root : root.getLogger(match[1].slice(1));
+        logger.setLevel(match[2].toUpperCase());
+    }
+
+    var api = {
+        Level: Level,
+        getLogger: root.getLogger.bind(root),
+        setEnabled: root.setEnabled.bind(root),
+        isEnabled: root.isEnabled.bind(root),
+        setLevel: root.setLevel.bind(root),
+        getLevel: root.getLevel.bind(root),
+        debug: root.debug.bind(root),
+        info: root.info.bind(root),
+        warn: root.warn.bind(root),
+        error: root.error.bind(root),
+        fatal: root.fatal.bind(root),
+        getWriter: getWriter,
+        setWriter: setWriter
+    };
+
+    // Expose as either an AMD module if possible. If not fall back to exposing
+    // a global object.
+    if (typeof define==="function")
+        define("logging", [], function () {
+            return api;
+        });
+    else
+        window.logging=api;
+})();
+
+// pattern specific logging config
+define('core/logger',[
+    'logging'
+], function(logging) {
+    var log = logging.getLogger('patterns');
+    return log;
 });
 
 define('transforms',[
@@ -15427,10 +9708,14 @@ define('transforms',[
             });
         },
 
-        transformContent: function(root) {
-            var $root = $(root);
+        transformContent: function($root) {
+            $root
+                .filter(".record-history")
+                .add(".record-history", $root)
+                .addClass("cant-touch-this");
+
             $root.find("legend:not(.cant-touch-this)").each(function() {
-                $(this).replaceWith('<p class="legend">'+$(this).html()+'</p>');
+                $(this).replaceWith("<p class='legend'>"+$(this).html()+"</p>");
             });
 
             // Replace objects with iframes for IE 8 and older.
@@ -15443,117 +9728,32 @@ define('transforms',[
     };
     return transforms;
 });
+
 define('utils',[
     "jquery"
 ], function($) {
-    var extractParameters = function(params, sources) {
-        var tmp,
-            j,
-            paramObjs = {};
-        if (params.length > 0) {
-            var p = params.slice(1).split('!');
-            for (var i = p.length-1; i >= 0; i--) {
-                // support injection parameters in other patterns
-                if (p[i][0] == '#') {
-                    var param, effect;
-
-                    if (p[i].indexOf('.') > 0) {
-                        tmp = p[i].split('.');
-                        param = tmp[0];
-                        effect = tmp[1];
-                    } else {
-                        param = p[i];
-                        effect = undefined;
-                    }
-                    var source = [sources.pop()];
-                    // XXX: $a and url were also not defined in the old context
-                    // We need automated tests
-                    mapal.injection.load($a, url, param.slice(1), source);
-                } else if (p[i].indexOf('=') > 0) {
-                    j = p[i].indexOf('=');
-                    paramObjs[p[i].slice(0, j)] = p[i].slice(j+1);
-                } else {
-                    paramObjs[p[i]] = true;
-                }
-            }
-        }
-        return paramObjs;
-    };
-
-    // input = "a!b=1 2!c=x"
-    // --> options = {a: true, b: '1 2', c: 'x'}
-    var parseOptions = function(input) {
-        var params = input.split("!"),
-            options = {}, name, value, index;
-
-        for (var i=0; i<params.length; i++) {
-            index = params[i].indexOf("=");
-            if (index === -1) {
-                name = params[i];
-                value = true;
-            } else {
-                name = params[i].slice(0, index);
-                value = params[i].slice(index+1);
-            }
-            options[name] = value;
-        }
-        return options;
-    };
-
     var jquery_plugin = function(pattern) {
         var plugin = function(method) {
+            var $this = this;
+            if ($this.length === 0)
+                return $this;
             if (!method || typeof method === "object") {
                 pattern.init.apply(
-                        this,
-                        [this].concat(Array.prototype.slice.call(arguments)));
+                    $this,
+                    [$this].concat(Array.prototype.slice.call(arguments)));
             } else if (pattern[method]) {
-                pattern[method].apply(
-                    this,
-                    [this].concat(Array.prototype.slice.call(arguments, 1))
+                return pattern[method].apply(
+                    $this,
+                    [$this].concat(Array.prototype.slice.call(arguments, 1))
                 );
             } else {
-                $.error('Method ' + method +
-                        ' does not exist on jQuery.' + pattern.name);
+                $.error("Method " + method +
+                        " does not exist on jQuery." + pattern.name);
             }
-            return this;
+            return $this;
         };
         return plugin;
     };
-
-    function _renumberAttribute(el, attr, i) {
-        var $el = $(el),
-            buf = $el.attr(attr);
-        if (buf) {
-            $el.attr(attr, buf.replace(/[0-9]+/, i));
-        }
-    }
-
-    function _renumberEl() {
-	_renumberAttribute(this, "for", i);
-	_renumberAttribute(this, "id", i);
-	_renumberAttribute(this, "name", i);
-    }
-
-    function renumber($container, selector) {
-        var $entries = $container.find(selector ? selector : "fieldset,tr,dd"),
-            entry, i;
-
-        for (i=0; i<$entries.length; i++) {
-            entry = $entries.get(i);
-            _renumberAttribute(entry, "id", i);
-            $("label, :input", entry).each(_renumberEl);
-        }
-    }
-
-
-    function hasContent($el) {
-        if ($el.is(":input")) {
-            return $el.val();
-        } else {
-            return $el.text().replace(/\s*/g, "") || $el.find("img,object,video,audio").length;
-        }
-    }
-
 
     //     Underscore.js 1.3.1
     //     (c) 2009-2012 Jeremy Ashkenas, DocumentCloud Inc.
@@ -15580,14 +9780,9 @@ define('utils',[
     };
 
     var utils = {
-        extractParameters: extractParameters,
-        parseOptions: parseOptions,
-        //load_modules: load_modules,
         // pattern pimping - own module?
         jquery_plugin: jquery_plugin,
-        debounce: debounce,
-	renumber: renumber,
-	hasContent: hasContent
+        debounce: debounce
     };
 
     return utils;
@@ -15607,7 +9802,7 @@ define('compat',[],function() {
 
             var t = Object(this);
             var len = t.length >>> 0;
-            if (typeof fun != "function")
+            if (typeof fun !== "function")
                 throw new TypeError();
 
             var thisp = arguments[1];
@@ -15632,7 +9827,7 @@ define('compat',[],function() {
 
             var t = Object(this);
             var len = t.length >>> 0;
-            if (typeof fun != "function")
+            if (typeof fun !== "function")
                 throw new TypeError();
 
             var res = [];
@@ -15674,7 +9869,7 @@ define('compat',[],function() {
 
             // 4. If IsCallable(callback) is false, throw a TypeError exception.
             // See: http://es5.github.com/#x9.11
-            if ( {}.toString.call(callback) != "[object Function]" ) {
+            if ( {}.toString.call(callback) !== "[object Function]" ) {
                 throw new TypeError( callback + " is not a function" );
             }
 
@@ -15728,9 +9923,9 @@ define('compat',[],function() {
             var n = 0;
             if (arguments.length > 0) {
                 n = Number(arguments[1]);
-                if (n != n) { // shortcut for verifying if it's NaN
+                if (n !== n) { // shortcut for verifying if it's NaN
                     n = 0;
-                } else if (n !== 0 && n != Infinity && n != -Infinity) {
+                } else if (n !== 0 && n !== Infinity && n !== -Infinity) {
                     n = (n > 0 || -1) * Math.floor(Math.abs(n));
                 }
             }
@@ -15765,9 +9960,9 @@ define('compat',[],function() {
             if (arguments.length > 1)
             {
                 n = Number(arguments[1]);
-                if (n != n)
+                if (n !== n)
                     n = 0;
-                else if (n !== 0 && n != (1 / 0) && n != -(1 / 0))
+                else if (n !== 0 && n !== (1 / 0) && n !== -(1 / 0))
                     n = (n > 0 || -1) * Math.floor(Math.abs(n));
             }
 
@@ -15804,7 +9999,7 @@ define('compat',[],function() {
 
             // 4. If IsCallable(callback) is false, throw a TypeError exception.
             // See: http://es5.github.com/#x9.11
-            if ({}.toString.call(callback) != "[object Function]") {
+            if ({}.toString.call(callback) !== "[object Function]") {
                 throw new TypeError(callback + " is not a function");
             }
 
@@ -15898,7 +10093,7 @@ define('compat',[],function() {
 
             var t = Object(this);
             var len = t.length >>> 0;
-            if (typeof callbackfn != "function")
+            if (typeof callbackfn !== "function")
                 throw new TypeError();
 
             // no value to return if no initial value, empty array
@@ -15952,7 +10147,7 @@ define('compat',[],function() {
 
             var t = Object(this);
             var len = t.length >>> 0;
-            if (typeof fun != "function")
+            if (typeof fun !== "function")
                 throw new TypeError();
 
             var thisp = arguments[1];
@@ -15969,41 +10164,73 @@ define('compat',[],function() {
 
     // https://developer.mozilla.org/en/JavaScript/Reference/Global_Objects/Array/isArray (JS 1.8.5)
     if (!Array.isArray) {
-	Array.isArray = function (arg) {
-            return Object.prototype.toString.call(arg) == '[object Array]';
-	};
+        Array.isArray = function (arg) {
+            return Object.prototype.toString.call(arg) === "[object Array]";
+        };
     }
 
     // source: https://developer.mozilla.org/en/JavaScript/Reference/Global_Objects/String/Trim (JS 1.8.1)
     if (!String.prototype.trim) {
         String.prototype.trim = function () {
-            return this.replace(/^\s+|\s+$/g,'');
+            return this.replace(/^\s+|\s+$/g, "");
         };
     }
 
-
     // source: https://developer.mozilla.org/en-US/docs/JavaScript/Reference/Global_Objects/Function/bind
     if (!Function.prototype.bind) {
-      Function.prototype.bind = function (oThis) {
-        if (typeof this !== "function") {
-          // closest thing possible to the ECMAScript 5 internal IsCallable function
-          throw new TypeError("Function.prototype.bind - what is trying to be bound is not callable");
-        }
+        Function.prototype.bind = function (oThis) {
+            if (typeof this !== "function") {
+                // closest thing possible to the ECMAScript 5 internal IsCallable function
+                throw new TypeError("Function.prototype.bind - what is trying to be bound is not callable");
+            }
 
-        var aArgs = Array.prototype.slice.call(arguments, 1), 
-            fToBind = this, 
-            fNOP = function () {},
-            fBound = function () {
-              return fToBind.apply(this instanceof fNOP &&
-                                   oThis ? this : oThis,
-                                   aArgs.concat(Array.prototype.slice.call(arguments)));
-            };
+            var aArgs = Array.prototype.slice.call(arguments, 1),
+                fToBind = this,
+                fNOP = function () {},
+                fBound = function () {
+                    return fToBind.apply(this instanceof fNOP &&
+                            oThis ? this : oThis,
+                            aArgs.concat(Array.prototype.slice.call(arguments)));
+                };
+            fNOP.prototype = this.prototype;
+            fBound.prototype = new fNOP();
 
-        fNOP.prototype = this.prototype;
-        fBound.prototype = new fNOP();
+            return fBound;
+        };
+    }
 
-        return fBound;
-      };
+    // https://developer.mozilla.org/en-US/docs/JavaScript/Reference/Global_Objects/Object/keys
+    if (!Object.keys) {
+        Object.keys = (function () {
+            var _hasOwnProperty = Object.prototype.hasOwnProperty,
+            hasDontEnumBug = !({toString: null}).propertyIsEnumerable("toString"),
+            dontEnums = [
+            "toString",
+            "toLocaleString",
+            "valueOf",
+            "hasOwnProperty",
+            "isPrototypeOf",
+            "propertyIsEnumerable",
+            "constructor"
+            ],
+            dontEnumsLength = dontEnums.length;
+
+            return function (obj) {
+                if (typeof obj !== "object" && typeof obj !== "function" || obj === null)
+                    throw new TypeError("Object.keys called on non-object");
+
+                var result = [];
+                for (var prop in obj)
+                    if (_hasOwnProperty.call(obj, prop))
+                        result.push(prop);
+
+                if (hasDontEnumBug)
+                    for (var i=0; i < dontEnumsLength; i++)
+                        if (_hasOwnProperty.call(obj, dontEnums[i]))
+                            result.push(dontEnums[i]);
+                return result;
+            };
+        })();
     }
 });
 
@@ -16017,43 +10244,67 @@ define('compat',[],function() {
  */
 define('registry',[
     "jquery",
-    "./logging",
+    "./core/logger",
     "./transforms",
     "./utils",
     // below here modules that are only loaded
     "./compat"
-], function($, logging, transforms, utils) {
-    var log = logging.getLogger('registry'),
+], function($, logger, transforms, utils) {
+    var log = logger.getLogger("registry"),
         jquery_plugin = utils.jquery_plugin;
 
     var registry = {
         patterns: {},
         scan: function(content) {
-            var $content = $(content), pattern, $match, plog, $initialised;
+            var $content = $(content),
+                all = [], allsel,
+                pattern, $match, plog;
+
             transforms.transformContent($content);
+
+            // selector for all patterns
             for (var name in registry.patterns) {
                 pattern = registry.patterns[name];
-                plog = logging.getLogger(name);
-
-                // construct set of matching elements
-                $match = $content.filter(pattern.trigger);
-                $match = $match.add($content.find(pattern.trigger));
-                $match = $match.filter(':not(.cant-touch-this)');
-
-                // call pattern init in case of matching elements, the
-                // pattern returns the set of actually initialised
-                // elements
-                if ($match.length > 0) {
-                    plog.debug('Initialising:', $match);
-                    try {
-                        pattern.init($match);
-                        plog.debug('Initialised:', $initialised);
-                    } catch (e) {
-                        plog.error("Error initialising pattern", e);
-                    }
+                if (pattern.trigger) {
+                    all.push(pattern.trigger);
                 }
             }
+            allsel = all.join(",");
+
+            // find all elements that belong to any pattern
+            $match = $content.filter(allsel);
+            $match = $match.add($content.find(allsel));
+            $match = $match.filter(":not(.cant-touch-this)");
+
+            // walk list backwards and initialize patterns inside-out.
+            //
+            // XXX: If patterns would only trigger via classes, we
+            // could iterate over an element classes and trigger
+            // patterns in order.
+            //
+            // Advantages: Order of pattern initialization controled
+            // via order of pat-classes and more efficient.
+            $match.toArray().reduceRight(function(acc, el) {
+                var $el = $(el);
+
+                for (var name in registry.patterns) {
+                    pattern = registry.patterns[name];
+                    plog = logger.getLogger("pat." + name);
+
+                    if ($el.is(pattern.trigger)) {
+                        plog.debug("Initialising:", $el);
+                        try {
+                            pattern.init($el);
+                            plog.debug("done.");
+                        } catch (e) {
+                            plog.error("Caught error:", e);
+                        }
+                    }
+                }
+            }, null);
         },
+        // XXX: differentiate between internal and custom patterns
+        // _register vs register
         register: function(pattern) {
             if (!pattern.name) {
                 log.error("Pattern lacks name:", pattern);
@@ -16069,18 +10320,23 @@ define('registry',[
 
             // register pattern as jquery plugin
             if (pattern.jquery_plugin) {
-                // XXX: here the pattern used to be jquery_plugin wrapped
-                $.fn[pattern.jquery_plugin] = jquery_plugin(pattern);
+                var pluginName = ("pat-" + pattern.name)
+                        .replace(/-([a-zA-Z])/g, function(match, p1) {
+                            return p1.toUpperCase();
+                        });
+                $.fn[pluginName] = jquery_plugin(pattern);
+                // BBB 2012-12-10
+                $.fn[pluginName.replace(/^pat/, "pattern")] = jquery_plugin(pattern);
             }
 
-            log.debug('Registered pattern:', pattern.name, pattern);
+            log.debug("Registered pattern:", pattern.name, pattern);
             return true;
         }
     };
 
-    $(document).on('patterns-injected.patterns', function(ev) {
+    $(document).on("patterns-injected.patterns", function(ev) {
         registry.scan(ev.target);
-        $(ev.target).trigger('patterns-injected-scanned');
+        $(ev.target).trigger("patterns-injected-scanned");
     });
 
 
@@ -16089,1697 +10345,6 @@ define('registry',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
-/*! jQuery Validation Plugin - v1.10.0 - 9/7/2012
-* https://github.com/jzaefferer/jquery-validation
-* Copyright (c) 2012 Jörn Zaefferer; Licensed MIT, GPL */
-
-(function($) {
-
-$.extend($.fn, {
-	// http://docs.jquery.com/Plugins/Validation/validate
-	validate: function( options ) {
-
-		// if nothing is selected, return nothing; can't chain anyway
-		if (!this.length) {
-			if (options && options.debug && window.console) {
-				console.warn( "nothing selected, can't validate, returning nothing" );
-			}
-			return;
-		}
-
-		// check if a validator for this form was already created
-		var validator = $.data(this[0], 'validator');
-		if ( validator ) {
-			return validator;
-		}
-
-		// Add novalidate tag if HTML5.
-		this.attr('novalidate', 'novalidate');
-
-		validator = new $.validator( options, this[0] );
-		$.data(this[0], 'validator', validator);
-
-		if ( validator.settings.onsubmit ) {
-
-			this.validateDelegate( ":submit", "click", function(ev) {
-				if ( validator.settings.submitHandler ) {
-					validator.submitButton = ev.target;
-				}
-				// allow suppressing validation by adding a cancel class to the submit button
-				if ( $(ev.target).hasClass('cancel') ) {
-					validator.cancelSubmit = true;
-				}
-			});
-
-			// validate the form on submit
-			this.submit( function( event ) {
-				if ( validator.settings.debug ) {
-					// prevent form submit to be able to see console output
-					event.preventDefault();
-				}
-				function handle() {
-					var hidden;
-					if ( validator.settings.submitHandler ) {
-						if (validator.submitButton) {
-							// insert a hidden input as a replacement for the missing submit button
-							hidden = $("<input type='hidden'/>").attr("name", validator.submitButton.name).val(validator.submitButton.value).appendTo(validator.currentForm);
-						}
-						validator.settings.submitHandler.call( validator, validator.currentForm, event );
-						if (validator.submitButton) {
-							// and clean up afterwards; thanks to no-block-scope, hidden can be referenced
-							hidden.remove();
-						}
-						return false;
-					}
-					return true;
-				}
-
-				// prevent submit for invalid forms or custom submit handlers
-				if ( validator.cancelSubmit ) {
-					validator.cancelSubmit = false;
-					return handle();
-				}
-				if ( validator.form() ) {
-					if ( validator.pendingRequest ) {
-						validator.formSubmitted = true;
-						return false;
-					}
-					return handle();
-				} else {
-					validator.focusInvalid();
-					return false;
-				}
-			});
-		}
-
-		return validator;
-	},
-	// http://docs.jquery.com/Plugins/Validation/valid
-	valid: function() {
-		if ( $(this[0]).is('form')) {
-			return this.validate().form();
-		} else {
-			var valid = true;
-			var validator = $(this[0].form).validate();
-			this.each(function() {
-				valid &= validator.element(this);
-			});
-			return valid;
-		}
-	},
-	// attributes: space seperated list of attributes to retrieve and remove
-	removeAttrs: function(attributes) {
-		var result = {},
-			$element = this;
-		$.each(attributes.split(/\s/), function(index, value) {
-			result[value] = $element.attr(value);
-			$element.removeAttr(value);
-		});
-		return result;
-	},
-	// http://docs.jquery.com/Plugins/Validation/rules
-	rules: function(command, argument) {
-		var element = this[0];
-
-		if (command) {
-			var settings = $.data(element.form, 'validator').settings;
-			var staticRules = settings.rules;
-			var existingRules = $.validator.staticRules(element);
-			switch(command) {
-			case "add":
-				$.extend(existingRules, $.validator.normalizeRule(argument));
-				staticRules[element.name] = existingRules;
-				if (argument.messages) {
-					settings.messages[element.name] = $.extend( settings.messages[element.name], argument.messages );
-				}
-				break;
-			case "remove":
-				if (!argument) {
-					delete staticRules[element.name];
-					return existingRules;
-				}
-				var filtered = {};
-				$.each(argument.split(/\s/), function(index, method) {
-					filtered[method] = existingRules[method];
-					delete existingRules[method];
-				});
-				return filtered;
-			}
-		}
-
-		var data = $.validator.normalizeRules(
-		$.extend(
-			{},
-			$.validator.metadataRules(element),
-			$.validator.classRules(element),
-			$.validator.attributeRules(element),
-			$.validator.staticRules(element)
-		), element);
-
-		// make sure required is at front
-		if (data.required) {
-			var param = data.required;
-			delete data.required;
-			data = $.extend({required: param}, data);
-		}
-
-		return data;
-	}
-});
-
-// Custom selectors
-$.extend($.expr[":"], {
-	// http://docs.jquery.com/Plugins/Validation/blank
-	blank: function(a) {return !$.trim("" + a.value);},
-	// http://docs.jquery.com/Plugins/Validation/filled
-	filled: function(a) {return !!$.trim("" + a.value);},
-	// http://docs.jquery.com/Plugins/Validation/unchecked
-	unchecked: function(a) {return !a.checked;}
-});
-
-// constructor for validator
-$.validator = function( options, form ) {
-	this.settings = $.extend( true, {}, $.validator.defaults, options );
-	this.currentForm = form;
-	this.init();
-};
-
-$.validator.format = function(source, params) {
-	if ( arguments.length === 1 ) {
-		return function() {
-			var args = $.makeArray(arguments);
-			args.unshift(source);
-			return $.validator.format.apply( this, args );
-		};
-	}
-	if ( arguments.length > 2 && params.constructor !== Array  ) {
-		params = $.makeArray(arguments).slice(1);
-	}
-	if ( params.constructor !== Array ) {
-		params = [ params ];
-	}
-	$.each(params, function(i, n) {
-		source = source.replace(new RegExp("\\{" + i + "\\}", "g"), n);
-	});
-	return source;
-};
-
-$.extend($.validator, {
-
-	defaults: {
-		messages: {},
-		groups: {},
-		rules: {},
-		errorClass: "error",
-		validClass: "valid",
-		errorElement: "label",
-		focusInvalid: true,
-		errorContainer: $( [] ),
-		errorLabelContainer: $( [] ),
-		onsubmit: true,
-		ignore: ":hidden",
-		ignoreTitle: false,
-		onfocusin: function(element, event) {
-			this.lastActive = element;
-
-			// hide error label and remove error class on focus if enabled
-			if ( this.settings.focusCleanup && !this.blockFocusCleanup ) {
-				if ( this.settings.unhighlight ) {
-					this.settings.unhighlight.call( this, element, this.settings.errorClass, this.settings.validClass );
-				}
-				this.addWrapper(this.errorsFor(element)).hide();
-			}
-		},
-		onfocusout: function(element, event) {
-			if ( !this.checkable(element) && (element.name in this.submitted || !this.optional(element)) ) {
-				this.element(element);
-			}
-		},
-		onkeyup: function(element, event) {
-			if ( event.which === 9 && this.elementValue(element) === '' ) {
-				return;
-			} else if ( element.name in this.submitted || element === this.lastActive ) {
-				this.element(element);
-			}
-		},
-		onclick: function(element, event) {
-			// click on selects, radiobuttons and checkboxes
-			if ( element.name in this.submitted ) {
-				this.element(element);
-			}
-			// or option elements, check parent select in that case
-			else if (element.parentNode.name in this.submitted) {
-				this.element(element.parentNode);
-			}
-		},
-		highlight: function(element, errorClass, validClass) {
-			if (element.type === 'radio') {
-				this.findByName(element.name).addClass(errorClass).removeClass(validClass);
-			} else {
-				$(element).addClass(errorClass).removeClass(validClass);
-			}
-		},
-		unhighlight: function(element, errorClass, validClass) {
-			if (element.type === 'radio') {
-				this.findByName(element.name).removeClass(errorClass).addClass(validClass);
-			} else {
-				$(element).removeClass(errorClass).addClass(validClass);
-			}
-		}
-	},
-
-	// http://docs.jquery.com/Plugins/Validation/Validator/setDefaults
-	setDefaults: function(settings) {
-		$.extend( $.validator.defaults, settings );
-	},
-
-	messages: {
-		required: "This field is required.",
-		remote: "Please fix this field.",
-		email: "Please enter a valid email address.",
-		url: "Please enter a valid URL.",
-		date: "Please enter a valid date.",
-		dateISO: "Please enter a valid date (ISO).",
-		number: "Please enter a valid number.",
-		digits: "Please enter only digits.",
-		creditcard: "Please enter a valid credit card number.",
-		equalTo: "Please enter the same value again.",
-		maxlength: $.validator.format("Please enter no more than {0} characters."),
-		minlength: $.validator.format("Please enter at least {0} characters."),
-		rangelength: $.validator.format("Please enter a value between {0} and {1} characters long."),
-		range: $.validator.format("Please enter a value between {0} and {1}."),
-		max: $.validator.format("Please enter a value less than or equal to {0}."),
-		min: $.validator.format("Please enter a value greater than or equal to {0}.")
-	},
-
-	autoCreateRanges: false,
-
-	prototype: {
-
-		init: function() {
-			this.labelContainer = $(this.settings.errorLabelContainer);
-			this.errorContext = this.labelContainer.length && this.labelContainer || $(this.currentForm);
-			this.containers = $(this.settings.errorContainer).add( this.settings.errorLabelContainer );
-			this.submitted = {};
-			this.valueCache = {};
-			this.pendingRequest = 0;
-			this.pending = {};
-			this.invalid = {};
-			this.reset();
-
-			var groups = (this.groups = {});
-			$.each(this.settings.groups, function(key, value) {
-				$.each(value.split(/\s/), function(index, name) {
-					groups[name] = key;
-				});
-			});
-			var rules = this.settings.rules;
-			$.each(rules, function(key, value) {
-				rules[key] = $.validator.normalizeRule(value);
-			});
-
-			function delegate(event) {
-				var validator = $.data(this[0].form, "validator"),
-					eventType = "on" + event.type.replace(/^validate/, "");
-				if (validator.settings[eventType]) {
-					validator.settings[eventType].call(validator, this[0], event);
-				}
-			}
-			$(this.currentForm)
-				.validateDelegate(":text, [type='password'], [type='file'], select, textarea, " +
-					"[type='number'], [type='search'] ,[type='tel'], [type='url'], " +
-					"[type='email'], [type='datetime'], [type='date'], [type='month'], " +
-					"[type='week'], [type='time'], [type='datetime-local'], " +
-					"[type='range'], [type='color'] ",
-					"focusin focusout keyup", delegate)
-				.validateDelegate("[type='radio'], [type='checkbox'], select, option", "click", delegate);
-
-			if (this.settings.invalidHandler) {
-				$(this.currentForm).bind("invalid-form.validate", this.settings.invalidHandler);
-			}
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Validator/form
-		form: function() {
-			this.checkForm();
-			$.extend(this.submitted, this.errorMap);
-			this.invalid = $.extend({}, this.errorMap);
-			if (!this.valid()) {
-				$(this.currentForm).triggerHandler("invalid-form", [this]);
-			}
-			this.showErrors();
-			return this.valid();
-		},
-
-		checkForm: function() {
-			this.prepareForm();
-			for ( var i = 0, elements = (this.currentElements = this.elements()); elements[i]; i++ ) {
-				this.check( elements[i] );
-			}
-			return this.valid();
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Validator/element
-		element: function( element ) {
-			element = this.validationTargetFor( this.clean( element ) );
-			this.lastElement = element;
-			this.prepareElement( element );
-			this.currentElements = $(element);
-			var result = this.check( element ) !== false;
-			if (result) {
-				delete this.invalid[element.name];
-			} else {
-				this.invalid[element.name] = true;
-			}
-			if ( !this.numberOfInvalids() ) {
-				// Hide error containers on last error
-				this.toHide = this.toHide.add( this.containers );
-			}
-			this.showErrors();
-			return result;
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Validator/showErrors
-		showErrors: function(errors) {
-			if(errors) {
-				// add items to error list and map
-				$.extend( this.errorMap, errors );
-				this.errorList = [];
-				for ( var name in errors ) {
-					this.errorList.push({
-						message: errors[name],
-						element: this.findByName(name)[0]
-					});
-				}
-				// remove items from success list
-				this.successList = $.grep( this.successList, function(element) {
-					return !(element.name in errors);
-				});
-			}
-			if (this.settings.showErrors) {
-				this.settings.showErrors.call( this, this.errorMap, this.errorList );
-			} else {
-				this.defaultShowErrors();
-			}
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Validator/resetForm
-		resetForm: function() {
-			if ( $.fn.resetForm ) {
-				$( this.currentForm ).resetForm();
-			}
-			this.submitted = {};
-			this.lastElement = null;
-			this.prepareForm();
-			this.hideErrors();
-			this.elements().removeClass( this.settings.errorClass ).removeData( "previousValue" );
-		},
-
-		numberOfInvalids: function() {
-			return this.objectLength(this.invalid);
-		},
-
-		objectLength: function( obj ) {
-			var count = 0;
-			for ( var i in obj ) {
-				count++;
-			}
-			return count;
-		},
-
-		hideErrors: function() {
-			this.addWrapper( this.toHide ).hide();
-		},
-
-		valid: function() {
-			return this.size() === 0;
-		},
-
-		size: function() {
-			return this.errorList.length;
-		},
-
-		focusInvalid: function() {
-			if( this.settings.focusInvalid ) {
-				try {
-					$(this.findLastActive() || this.errorList.length && this.errorList[0].element || [])
-					.filter(":visible")
-					.focus()
-					// manually trigger focusin event; without it, focusin handler isn't called, findLastActive won't have anything to find
-					.trigger("focusin");
-				} catch(e) {
-					// ignore IE throwing errors when focusing hidden elements
-				}
-			}
-		},
-
-		findLastActive: function() {
-			var lastActive = this.lastActive;
-			return lastActive && $.grep(this.errorList, function(n) {
-				return n.element.name === lastActive.name;
-			}).length === 1 && lastActive;
-		},
-
-		elements: function() {
-			var validator = this,
-				rulesCache = {};
-
-			// select all valid inputs inside the form (no submit or reset buttons)
-			return $(this.currentForm)
-			.find("input, select, textarea")
-			.not(":submit, :reset, :image, [disabled]")
-			.not( this.settings.ignore )
-			.filter(function() {
-				if ( !this.name && validator.settings.debug && window.console ) {
-					console.error( "%o has no name assigned", this);
-				}
-
-				// select only the first element for each name, and only those with rules specified
-				if ( this.name in rulesCache || !validator.objectLength($(this).rules()) ) {
-					return false;
-				}
-
-				rulesCache[this.name] = true;
-				return true;
-			});
-		},
-
-		clean: function( selector ) {
-			return $( selector )[0];
-		},
-
-		errors: function() {
-			var errorClass = this.settings.errorClass.replace(' ', '.');
-			return $( this.settings.errorElement + "." + errorClass, this.errorContext );
-		},
-
-		reset: function() {
-			this.successList = [];
-			this.errorList = [];
-			this.errorMap = {};
-			this.toShow = $([]);
-			this.toHide = $([]);
-			this.currentElements = $([]);
-		},
-
-		prepareForm: function() {
-			this.reset();
-			this.toHide = this.errors().add( this.containers );
-		},
-
-		prepareElement: function( element ) {
-			this.reset();
-			this.toHide = this.errorsFor(element);
-		},
-
-		elementValue: function( element ) {
-			var type = $(element).attr('type'),
-				val = $(element).val();
-
-			if ( type === 'radio' || type === 'checkbox' ) {
-				return $('input[name="' + $(element).attr('name') + '"]:checked').val();
-			}
-
-			if ( typeof val === 'string' ) {
-				return val.replace(/\r/g, "");
-			}
-			return val;
-		},
-
-		check: function( element ) {
-			element = this.validationTargetFor( this.clean( element ) );
-
-			var rules = $(element).rules();
-			var dependencyMismatch = false;
-			var val = this.elementValue(element);
-			var result;
-
-			for (var method in rules ) {
-				var rule = { method: method, parameters: rules[method] };
-				try {
-
-					result = $.validator.methods[method].call( this, val, element, rule.parameters );
-
-					// if a method indicates that the field is optional and therefore valid,
-					// don't mark it as valid when there are no other rules
-					if ( result === "dependency-mismatch" ) {
-						dependencyMismatch = true;
-						continue;
-					}
-					dependencyMismatch = false;
-
-					if ( result === "pending" ) {
-						this.toHide = this.toHide.not( this.errorsFor(element) );
-						return;
-					}
-
-					if( !result ) {
-						this.formatAndAdd( element, rule );
-						return false;
-					}
-				} catch(e) {
-					if ( this.settings.debug && window.console ) {
-						console.log("exception occured when checking element " + element.id + ", check the '" + rule.method + "' method", e);
-					}
-					throw e;
-				}
-			}
-			if (dependencyMismatch) {
-				return;
-			}
-			if ( this.objectLength(rules) ) {
-				this.successList.push(element);
-			}
-			return true;
-		},
-
-		// return the custom message for the given element and validation method
-		// specified in the element's "messages" metadata
-		customMetaMessage: function(element, method) {
-			if (!$.metadata) {
-				return;
-			}
-			var meta = this.settings.meta ? $(element).metadata()[this.settings.meta] : $(element).metadata();
-			return meta && meta.messages && meta.messages[method];
-		},
-
-		// return the custom message for the given element and validation method
-		// specified in the element's HTML5 data attribute
-		customDataMessage: function(element, method) {
-			return $(element).data('msg-' + method.toLowerCase()) || (element.attributes && $(element).attr('data-msg-' + method.toLowerCase()));
-		},
-
-		// return the custom message for the given element name and validation method
-		customMessage: function( name, method ) {
-			var m = this.settings.messages[name];
-			return m && (m.constructor === String ? m : m[method]);
-		},
-
-		// return the first defined argument, allowing empty strings
-		findDefined: function() {
-			for(var i = 0; i < arguments.length; i++) {
-				if (arguments[i] !== undefined) {
-					return arguments[i];
-				}
-			}
-			return undefined;
-		},
-
-		defaultMessage: function( element, method) {
-			return this.findDefined(
-				this.customMessage( element.name, method ),
-				this.customDataMessage( element, method ),
-				this.customMetaMessage( element, method ),
-				// title is never undefined, so handle empty string as undefined
-				!this.settings.ignoreTitle && element.title || undefined,
-				$.validator.messages[method],
-				"<strong>Warning: No message defined for " + element.name + "</strong>"
-			);
-		},
-
-		formatAndAdd: function( element, rule ) {
-			var message = this.defaultMessage( element, rule.method ),
-				theregex = /\$?\{(\d+)\}/g;
-			if ( typeof message === "function" ) {
-				message = message.call(this, rule.parameters, element);
-			} else if (theregex.test(message)) {
-				message = $.validator.format(message.replace(theregex, '{$1}'), rule.parameters);
-			}
-			this.errorList.push({
-				message: message,
-				element: element
-			});
-
-			this.errorMap[element.name] = message;
-			this.submitted[element.name] = message;
-		},
-
-		addWrapper: function(toToggle) {
-			if ( this.settings.wrapper ) {
-				toToggle = toToggle.add( toToggle.parent( this.settings.wrapper ) );
-			}
-			return toToggle;
-		},
-
-		defaultShowErrors: function() {
-			var i, elements;
-			for ( i = 0; this.errorList[i]; i++ ) {
-				var error = this.errorList[i];
-				if ( this.settings.highlight ) {
-					this.settings.highlight.call( this, error.element, this.settings.errorClass, this.settings.validClass );
-				}
-				this.showLabel( error.element, error.message );
-			}
-			if( this.errorList.length ) {
-				this.toShow = this.toShow.add( this.containers );
-			}
-			if (this.settings.success) {
-				for ( i = 0; this.successList[i]; i++ ) {
-					this.showLabel( this.successList[i] );
-				}
-			}
-			if (this.settings.unhighlight) {
-				for ( i = 0, elements = this.validElements(); elements[i]; i++ ) {
-					this.settings.unhighlight.call( this, elements[i], this.settings.errorClass, this.settings.validClass );
-				}
-			}
-			this.toHide = this.toHide.not( this.toShow );
-			this.hideErrors();
-			this.addWrapper( this.toShow ).show();
-		},
-
-		validElements: function() {
-			return this.currentElements.not(this.invalidElements());
-		},
-
-		invalidElements: function() {
-			return $(this.errorList).map(function() {
-				return this.element;
-			});
-		},
-
-		showLabel: function(element, message) {
-			var label = this.errorsFor( element );
-			if ( label.length ) {
-				// refresh error/success class
-				label.removeClass( this.settings.validClass ).addClass( this.settings.errorClass );
-
-				// check if we have a generated label, replace the message then
-				if ( label.attr("generated") ) {
-					label.html(message);
-				}
-			} else {
-				// create label
-				label = $("<" + this.settings.errorElement + "/>")
-					.attr({"for":  this.idOrName(element), generated: true})
-					.addClass(this.settings.errorClass)
-					.html(message || "");
-				if ( this.settings.wrapper ) {
-					// make sure the element is visible, even in IE
-					// actually showing the wrapped element is handled elsewhere
-					label = label.hide().show().wrap("<" + this.settings.wrapper + "/>").parent();
-				}
-				if ( !this.labelContainer.append(label).length ) {
-					if ( this.settings.errorPlacement ) {
-						this.settings.errorPlacement(label, $(element) );
-					} else {
-					label.insertAfter(element);
-					}
-				}
-			}
-			if ( !message && this.settings.success ) {
-				label.text("");
-				if ( typeof this.settings.success === "string" ) {
-					label.addClass( this.settings.success );
-				} else {
-					this.settings.success( label, element );
-				}
-			}
-			this.toShow = this.toShow.add(label);
-		},
-
-		errorsFor: function(element) {
-			var name = this.idOrName(element);
-			return this.errors().filter(function() {
-				return $(this).attr('for') === name;
-			});
-		},
-
-		idOrName: function(element) {
-			return this.groups[element.name] || (this.checkable(element) ? element.name : element.id || element.name);
-		},
-
-		validationTargetFor: function(element) {
-			// if radio/checkbox, validate first element in group instead
-			if (this.checkable(element)) {
-				element = this.findByName( element.name ).not(this.settings.ignore)[0];
-			}
-			return element;
-		},
-
-		checkable: function( element ) {
-			return (/radio|checkbox/i).test(element.type);
-		},
-
-		findByName: function( name ) {
-			return $(this.currentForm).find('[name="' + name + '"]');
-		},
-
-		getLength: function(value, element) {
-			switch( element.nodeName.toLowerCase() ) {
-			case 'select':
-				return $("option:selected", element).length;
-			case 'input':
-				if( this.checkable( element) ) {
-					return this.findByName(element.name).filter(':checked').length;
-				}
-			}
-			return value.length;
-		},
-
-		depend: function(param, element) {
-			return this.dependTypes[typeof param] ? this.dependTypes[typeof param](param, element) : true;
-		},
-
-		dependTypes: {
-			"boolean": function(param, element) {
-				return param;
-			},
-			"string": function(param, element) {
-				return !!$(param, element.form).length;
-			},
-			"function": function(param, element) {
-				return param(element);
-			}
-		},
-
-		optional: function(element) {
-			var val = this.elementValue(element);
-			return !$.validator.methods.required.call(this, val, element) && "dependency-mismatch";
-		},
-
-		startRequest: function(element) {
-			if (!this.pending[element.name]) {
-				this.pendingRequest++;
-				this.pending[element.name] = true;
-			}
-		},
-
-		stopRequest: function(element, valid) {
-			this.pendingRequest--;
-			// sometimes synchronization fails, make sure pendingRequest is never < 0
-			if (this.pendingRequest < 0) {
-				this.pendingRequest = 0;
-			}
-			delete this.pending[element.name];
-			if ( valid && this.pendingRequest === 0 && this.formSubmitted && this.form() ) {
-				$(this.currentForm).submit();
-				this.formSubmitted = false;
-			} else if (!valid && this.pendingRequest === 0 && this.formSubmitted) {
-				$(this.currentForm).triggerHandler("invalid-form", [this]);
-				this.formSubmitted = false;
-			}
-		},
-
-		previousValue: function(element) {
-			return $.data(element, "previousValue") || $.data(element, "previousValue", {
-				old: null,
-				valid: true,
-				message: this.defaultMessage( element, "remote" )
-			});
-		}
-
-	},
-
-	classRuleSettings: {
-		required: {required: true},
-		email: {email: true},
-		url: {url: true},
-		date: {date: true},
-		dateISO: {dateISO: true},
-		number: {number: true},
-		digits: {digits: true},
-		creditcard: {creditcard: true}
-	},
-
-	addClassRules: function(className, rules) {
-		if ( className.constructor === String ) {
-			this.classRuleSettings[className] = rules;
-		} else {
-			$.extend(this.classRuleSettings, className);
-		}
-	},
-
-	classRules: function(element) {
-		var rules = {};
-		var classes = $(element).attr('class');
-		if ( classes ) {
-			$.each(classes.split(' '), function() {
-				if (this in $.validator.classRuleSettings) {
-					$.extend(rules, $.validator.classRuleSettings[this]);
-				}
-			});
-		}
-		return rules;
-	},
-
-	attributeRules: function(element) {
-		var rules = {};
-		var $element = $(element);
-
-		for (var method in $.validator.methods) {
-			var value;
-
-			// support for <input required> in both html5 and older browsers
-			if (method === 'required') {
-				value = $element.get(0).getAttribute(method);
-				// Some browsers return an empty string for the required attribute
-				// and non-HTML5 browsers might have required="" markup
-				if (value === "") {
-					value = true;
-				}
-				// force non-HTML5 browsers to return bool
-				value = !!value;
-			} else {
-				value = $element.attr(method);
-			}
-
-			if (value) {
-				rules[method] = value;
-			} else if ($element[0].getAttribute("type") === method) {
-				rules[method] = true;
-			}
-		}
-
-		// maxlength may be returned as -1, 2147483647 (IE) and 524288 (safari) for text inputs
-		if (rules.maxlength && /-1|2147483647|524288/.test(rules.maxlength)) {
-			delete rules.maxlength;
-		}
-
-		return rules;
-	},
-
-	metadataRules: function(element) {
-		if (!$.metadata) {
-			return {};
-		}
-
-		var meta = $.data(element.form, 'validator').settings.meta;
-		return meta ?
-			$(element).metadata()[meta] :
-			$(element).metadata();
-	},
-
-	staticRules: function(element) {
-		var rules = {};
-		var validator = $.data(element.form, 'validator');
-		if (validator.settings.rules) {
-			rules = $.validator.normalizeRule(validator.settings.rules[element.name]) || {};
-		}
-		return rules;
-	},
-
-	normalizeRules: function(rules, element) {
-		// handle dependency check
-		$.each(rules, function(prop, val) {
-			// ignore rule when param is explicitly false, eg. required:false
-			if (val === false) {
-				delete rules[prop];
-				return;
-			}
-			if (val.param || val.depends) {
-				var keepRule = true;
-				switch (typeof val.depends) {
-					case "string":
-						keepRule = !!$(val.depends, element.form).length;
-						break;
-					case "function":
-						keepRule = val.depends.call(element, element);
-						break;
-				}
-				if (keepRule) {
-					rules[prop] = val.param !== undefined ? val.param : true;
-				} else {
-					delete rules[prop];
-				}
-			}
-		});
-
-		// evaluate parameters
-		$.each(rules, function(rule, parameter) {
-			rules[rule] = $.isFunction(parameter) ? parameter(element) : parameter;
-		});
-
-		// clean number parameters
-		$.each(['minlength', 'maxlength', 'min', 'max'], function() {
-			if (rules[this]) {
-				rules[this] = Number(rules[this]);
-			}
-		});
-		$.each(['rangelength', 'range'], function() {
-			if (rules[this]) {
-				rules[this] = [Number(rules[this][0]), Number(rules[this][1])];
-			}
-		});
-
-		if ($.validator.autoCreateRanges) {
-			// auto-create ranges
-			if (rules.min && rules.max) {
-				rules.range = [rules.min, rules.max];
-				delete rules.min;
-				delete rules.max;
-			}
-			if (rules.minlength && rules.maxlength) {
-				rules.rangelength = [rules.minlength, rules.maxlength];
-				delete rules.minlength;
-				delete rules.maxlength;
-			}
-		}
-
-		// To support custom messages in metadata ignore rule methods titled "messages"
-		if (rules.messages) {
-			delete rules.messages;
-		}
-
-		return rules;
-	},
-
-	// Converts a simple string to a {string: true} rule, e.g., "required" to {required:true}
-	normalizeRule: function(data) {
-		if( typeof data === "string" ) {
-			var transformed = {};
-			$.each(data.split(/\s/), function() {
-				transformed[this] = true;
-			});
-			data = transformed;
-		}
-		return data;
-	},
-
-	// http://docs.jquery.com/Plugins/Validation/Validator/addMethod
-	addMethod: function(name, method, message) {
-		$.validator.methods[name] = method;
-		$.validator.messages[name] = message !== undefined ? message : $.validator.messages[name];
-		if (method.length < 3) {
-			$.validator.addClassRules(name, $.validator.normalizeRule(name));
-		}
-	},
-
-	methods: {
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/required
-		required: function(value, element, param) {
-			// check if dependency is met
-			if ( !this.depend(param, element) ) {
-				return "dependency-mismatch";
-			}
-			if ( element.nodeName.toLowerCase() === "select" ) {
-				// could be an array for select-multiple or a string, both are fine this way
-				var val = $(element).val();
-				return val && val.length > 0;
-			}
-			if ( this.checkable(element) ) {
-				return this.getLength(value, element) > 0;
-			}
-			return $.trim(value).length > 0;
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/remote
-		remote: function(value, element, param) {
-			if ( this.optional(element) ) {
-				return "dependency-mismatch";
-			}
-
-			var previous = this.previousValue(element);
-			if (!this.settings.messages[element.name] ) {
-				this.settings.messages[element.name] = {};
-			}
-			previous.originalMessage = this.settings.messages[element.name].remote;
-			this.settings.messages[element.name].remote = previous.message;
-
-			param = typeof param === "string" && {url:param} || param;
-
-			if ( this.pending[element.name] ) {
-				return "pending";
-			}
-			if ( previous.old === value ) {
-				return previous.valid;
-			}
-
-			previous.old = value;
-			var validator = this;
-			this.startRequest(element);
-			var data = {};
-			data[element.name] = value;
-			$.ajax($.extend(true, {
-				url: param,
-				mode: "abort",
-				port: "validate" + element.name,
-				dataType: "json",
-				data: data,
-				success: function(response) {
-					validator.settings.messages[element.name].remote = previous.originalMessage;
-					var valid = response === true || response === "true";
-					if ( valid ) {
-						var submitted = validator.formSubmitted;
-						validator.prepareElement(element);
-						validator.formSubmitted = submitted;
-						validator.successList.push(element);
-						delete validator.invalid[element.name];
-						validator.showErrors();
-					} else {
-						var errors = {};
-						var message = response || validator.defaultMessage( element, "remote" );
-						errors[element.name] = previous.message = $.isFunction(message) ? message(value) : message;
-						validator.invalid[element.name] = true;
-						validator.showErrors(errors);
-					}
-					previous.valid = valid;
-					validator.stopRequest(element, valid);
-				}
-			}, param));
-			return "pending";
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/minlength
-		minlength: function(value, element, param) {
-			var length = $.isArray( value ) ? value.length : this.getLength($.trim(value), element);
-			return this.optional(element) || length >= param;
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/maxlength
-		maxlength: function(value, element, param) {
-			var length = $.isArray( value ) ? value.length : this.getLength($.trim(value), element);
-			return this.optional(element) || length <= param;
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/rangelength
-		rangelength: function(value, element, param) {
-			var length = $.isArray( value ) ? value.length : this.getLength($.trim(value), element);
-			return this.optional(element) || ( length >= param[0] && length <= param[1] );
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/min
-		min: function( value, element, param ) {
-			return this.optional(element) || value >= param;
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/max
-		max: function( value, element, param ) {
-			return this.optional(element) || value <= param;
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/range
-		range: function( value, element, param ) {
-			return this.optional(element) || ( value >= param[0] && value <= param[1] );
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/email
-		email: function(value, element) {
-			// contributed by Scott Gonzalez: http://projects.scottsplayground.com/email_address_validation/
-			return this.optional(element) || /^((([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+(\.([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+)*)|((\x22)((((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(([\x01-\x08\x0b\x0c\x0e-\x1f\x7f]|\x21|[\x23-\x5b]|[\x5d-\x7e]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(\\([\x01-\x09\x0b\x0c\x0d-\x7f]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]))))*(((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(\x22)))@((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)+(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))$/i.test(value);
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/url
-		url: function(value, element) {
-			// contributed by Scott Gonzalez: http://projects.scottsplayground.com/iri/
-			return this.optional(element) || /^(https?|ftp):\/\/(((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:)*@)?(((\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5]))|((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)+(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.?)(:\d*)?)(\/((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)+(\/(([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)*)*)?)?(\?((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|[\uE000-\uF8FF]|\/|\?)*)?(\#((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|\/|\?)*)?$/i.test(value);
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/date
-		date: function(value, element) {
-			return this.optional(element) || !/Invalid|NaN/.test(new Date(value));
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/dateISO
-		dateISO: function(value, element) {
-			return this.optional(element) || /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(value);
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/number
-		number: function(value, element) {
-			return this.optional(element) || /^-?(?:\d+|\d{1,3}(?:,\d{3})+)?(?:\.\d+)?$/.test(value);
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/digits
-		digits: function(value, element) {
-			return this.optional(element) || /^\d+$/.test(value);
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/creditcard
-		// based on http://en.wikipedia.org/wiki/Luhn
-		creditcard: function(value, element) {
-			if ( this.optional(element) ) {
-				return "dependency-mismatch";
-			}
-			// accept only spaces, digits and dashes
-			if (/[^0-9 \-]+/.test(value)) {
-				return false;
-			}
-			var nCheck = 0,
-				nDigit = 0,
-				bEven = false;
-
-			value = value.replace(/\D/g, "");
-
-			for (var n = value.length - 1; n >= 0; n--) {
-				var cDigit = value.charAt(n);
-				nDigit = parseInt(cDigit, 10);
-				if (bEven) {
-					if ((nDigit *= 2) > 9) {
-						nDigit -= 9;
-					}
-				}
-				nCheck += nDigit;
-				bEven = !bEven;
-			}
-
-			return (nCheck % 10) === 0;
-		},
-
-		// http://docs.jquery.com/Plugins/Validation/Methods/equalTo
-		equalTo: function(value, element, param) {
-			// bind to the blur event of the target in order to revalidate whenever the target field is updated
-			// TODO find a way to bind the event just once, avoiding the unbind-rebind overhead
-			var target = $(param);
-			if (this.settings.onfocusout) {
-				target.unbind(".validate-equalTo").bind("blur.validate-equalTo", function() {
-					$(element).valid();
-				});
-			}
-			return value === target.val();
-		}
-
-	}
-
-});
-
-// deprecated, use $.validator.format instead
-$.format = $.validator.format;
-
-}(jQuery));
-
-// ajax mode: abort
-// usage: $.ajax({ mode: "abort"[, port: "uniqueport"]});
-// if mode:"abort" is used, the previous request on that port (port can be undefined) is aborted via XMLHttpRequest.abort()
-(function($) {
-	var pendingRequests = {};
-	// Use a prefilter if available (1.5+)
-	if ( $.ajaxPrefilter ) {
-		$.ajaxPrefilter(function(settings, _, xhr) {
-			var port = settings.port;
-			if (settings.mode === "abort") {
-				if ( pendingRequests[port] ) {
-					pendingRequests[port].abort();
-				}
-				pendingRequests[port] = xhr;
-			}
-		});
-	} else {
-		// Proxy ajax
-		var ajax = $.ajax;
-		$.ajax = function(settings) {
-			var mode = ( "mode" in settings ? settings : $.ajaxSettings ).mode,
-				port = ( "port" in settings ? settings : $.ajaxSettings ).port;
-			if (mode === "abort") {
-				if ( pendingRequests[port] ) {
-					pendingRequests[port].abort();
-				}
-				return (pendingRequests[port] = ajax.apply(this, arguments));
-			}
-			return ajax.apply(this, arguments);
-		};
-	}
-}(jQuery));
-
-// provides cross-browser focusin and focusout events
-// IE has native support, in other browsers, use event caputuring (neither bubbles)
-
-// provides delegate(type: String, delegate: Selector, handler: Callback) plugin for easier event delegation
-// handler is only called when $(event.target).is(delegate), in the scope of the jquery-object for event.target
-(function($) {
-	// only implement if not provided by jQuery core (since 1.4)
-	// TODO verify if jQuery 1.4's implementation is compatible with older jQuery special-event APIs
-	if (!jQuery.event.special.focusin && !jQuery.event.special.focusout && document.addEventListener) {
-		$.each({
-			focus: 'focusin',
-			blur: 'focusout'
-		}, function( original, fix ){
-			$.event.special[fix] = {
-				setup:function() {
-					this.addEventListener( original, handler, true );
-				},
-				teardown:function() {
-					this.removeEventListener( original, handler, true );
-				},
-				handler: function(e) {
-					var args = arguments;
-					args[0] = $.event.fix(e);
-					args[0].type = fix;
-					return $.event.handle.apply(this, args);
-				}
-			};
-			function handler(e) {
-				e = $.event.fix(e);
-				e.type = fix;
-				return $.event.handle.call(this, e);
-			}
-		});
-	}
-	$.extend($.fn, {
-		validateDelegate: function(delegate, type, handler) {
-			return this.bind(type, function(event) {
-				var target = $(event.target);
-				if (target.is(delegate)) {
-					return handler.apply(target, arguments);
-				}
-			});
-		}
-	});
-}(jQuery));
-
-define("jquery_validate", ["jquery"], function(){});
-
-/*! jQuery Validation Plugin - v1.10.0 - 9/7/2012
-* https://github.com/jzaefferer/jquery-validation
-* Copyright (c) 2012 Jörn Zaefferer; Licensed MIT, GPL */
-
-/*!
- * jQuery Validation Plugin 1.10.0
- *
- * http://bassistance.de/jquery-plugins/jquery-plugin-validation/
- * http://docs.jquery.com/Plugins/Validation
- *
- * Copyright (c) 2006 - 2011 Jörn Zaefferer
- *
- * Dual licensed under the MIT and GPL licenses:
- *   http://www.opensource.org/licenses/mit-license.php
- *   http://www.gnu.org/licenses/gpl.html
- */
-
-(function() {
-
-	function stripHtml(value) {
-		// remove html tags and space chars
-		return value.replace(/<.[^<>]*?>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ')
-		// remove punctuation
-		.replace(/[.(),;:!?%#$'"_+=\/-]*/g,'');
-	}
-	jQuery.validator.addMethod("maxWords", function(value, element, params) {
-		return this.optional(element) || stripHtml(value).match(/\b\w+\b/g).length <= params;
-	}, jQuery.validator.format("Please enter {0} words or less."));
-
-	jQuery.validator.addMethod("minWords", function(value, element, params) {
-		return this.optional(element) || stripHtml(value).match(/\b\w+\b/g).length >= params;
-	}, jQuery.validator.format("Please enter at least {0} words."));
-
-	jQuery.validator.addMethod("rangeWords", function(value, element, params) {
-		var valueStripped = stripHtml(value);
-		var regex = /\b\w+\b/g;
-		return this.optional(element) || valueStripped.match(regex).length >= params[0] && valueStripped.match(regex).length <= params[1];
-	}, jQuery.validator.format("Please enter between {0} and {1} words."));
-
-})();
-
-jQuery.validator.addMethod("letterswithbasicpunc", function(value, element) {
-	return this.optional(element) || /^[a-z\-.,()'\"\s]+$/i.test(value);
-}, "Letters or punctuation only please");
-
-jQuery.validator.addMethod("alphanumeric", function(value, element) {
-	return this.optional(element) || /^\w+$/i.test(value);
-}, "Letters, numbers, and underscores only please");
-
-jQuery.validator.addMethod("lettersonly", function(value, element) {
-	return this.optional(element) || /^[a-z]+$/i.test(value);
-}, "Letters only please");
-
-jQuery.validator.addMethod("nowhitespace", function(value, element) {
-	return this.optional(element) || /^\S+$/i.test(value);
-}, "No white space please");
-
-jQuery.validator.addMethod("ziprange", function(value, element) {
-	return this.optional(element) || /^90[2-5]\d\{2\}-\d{4}$/.test(value);
-}, "Your ZIP-code must be in the range 902xx-xxxx to 905-xx-xxxx");
-
-jQuery.validator.addMethod("zipcodeUS", function(value, element) {
-	return this.optional(element) || /\d{5}-\d{4}$|^\d{5}$/.test(value)
-}, "The specified US ZIP Code is invalid");
-
-jQuery.validator.addMethod("integer", function(value, element) {
-	return this.optional(element) || /^-?\d+$/.test(value);
-}, "A positive or negative non-decimal number please");
-
-/**
- * Return true, if the value is a valid vehicle identification number (VIN).
- *
- * Works with all kind of text inputs.
- *
- * @example <input type="text" size="20" name="VehicleID" class="{required:true,vinUS:true}" />
- * @desc Declares a required input element whose value must be a valid vehicle identification number.
- *
- * @name jQuery.validator.methods.vinUS
- * @type Boolean
- * @cat Plugins/Validate/Methods
- */
-jQuery.validator.addMethod("vinUS", function(v) {
-	if (v.length != 17) {
-		return false;
-	}
-	var i, n, d, f, cd, cdv;
-	var LL = ["A","B","C","D","E","F","G","H","J","K","L","M","N","P","R","S","T","U","V","W","X","Y","Z"];
-	var VL = [1,2,3,4,5,6,7,8,1,2,3,4,5,7,9,2,3,4,5,6,7,8,9];
-	var FL = [8,7,6,5,4,3,2,10,0,9,8,7,6,5,4,3,2];
-	var rs = 0;
-	for(i = 0; i < 17; i++){
-		f = FL[i];
-		d = v.slice(i,i+1);
-		if (i == 8) {
-			cdv = d;
-		}
-		if (!isNaN(d)) {
-			d *= f;
-		} else {
-			for (n = 0; n < LL.length; n++) {
-				if (d.toUpperCase() === LL[n]) {
-					d = VL[n];
-					d *= f;
-					if (isNaN(cdv) && n == 8) {
-						cdv = LL[n];
-					}
-					break;
-				}
-			}
-		}
-		rs += d;
-	}
-	cd = rs % 11;
-	if (cd == 10) {
-		cd = "X";
-	}
-	if (cd == cdv) {
-		return true;
-	}
-	return false;
-}, "The specified vehicle identification number (VIN) is invalid.");
-
-/**
- * Return true, if the value is a valid date, also making this formal check dd/mm/yyyy.
- *
- * @example jQuery.validator.methods.date("01/01/1900")
- * @result true
- *
- * @example jQuery.validator.methods.date("01/13/1990")
- * @result false
- *
- * @example jQuery.validator.methods.date("01.01.1900")
- * @result false
- *
- * @example <input name="pippo" class="{dateITA:true}" />
- * @desc Declares an optional input element whose value must be a valid date.
- *
- * @name jQuery.validator.methods.dateITA
- * @type Boolean
- * @cat Plugins/Validate/Methods
- */
-jQuery.validator.addMethod("dateITA", function(value, element) {
-	var check = false;
-	var re = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
-	if( re.test(value)){
-		var adata = value.split('/');
-		var gg = parseInt(adata[0],10);
-		var mm = parseInt(adata[1],10);
-		var aaaa = parseInt(adata[2],10);
-		var xdata = new Date(aaaa,mm-1,gg);
-		if ( ( xdata.getFullYear() == aaaa ) && ( xdata.getMonth () == mm - 1 ) && ( xdata.getDate() == gg ) )
-			check = true;
-		else
-			check = false;
-	} else
-		check = false;
-	return this.optional(element) || check;
-}, "Please enter a correct date");
-
-jQuery.validator.addMethod("dateNL", function(value, element) {
-	return this.optional(element) || /^\d\d?[\.\/-]\d\d?[\.\/-]\d\d\d?\d?$/.test(value);
-}, "Vul hier een geldige datum in.");
-
-jQuery.validator.addMethod("time", function(value, element) {
-	return this.optional(element) || /^([0-1]\d|2[0-3]):([0-5]\d)$/.test(value);
-}, "Please enter a valid time, between 00:00 and 23:59");
-jQuery.validator.addMethod("time12h", function(value, element) {
-	return this.optional(element) || /^((0?[1-9]|1[012])(:[0-5]\d){0,2}(\ [AP]M))$/i.test(value);
-}, "Please enter a valid time, between 00:00 am and 12:00 pm");
-
-/**
- * matches US phone number format
- *
- * where the area code may not start with 1 and the prefix may not start with 1
- * allows '-' or ' ' as a separator and allows parens around area code
- * some people may want to put a '1' in front of their number
- *
- * 1(212)-999-2345 or
- * 212 999 2344 or
- * 212-999-0983
- *
- * but not
- * 111-123-5434
- * and not
- * 212 123 4567
- */
-jQuery.validator.addMethod("phoneUS", function(phone_number, element) {
-	phone_number = phone_number.replace(/\s+/g, "");
-	return this.optional(element) || phone_number.length > 9 &&
-		phone_number.match(/^(\+?1-?)?(\([2-9]\d{2}\)|[2-9]\d{2})-?[2-9]\d{2}-?\d{4}$/);
-}, "Please specify a valid phone number");
-
-jQuery.validator.addMethod('phoneUK', function(phone_number, element) {
-	phone_number = phone_number.replace(/\(|\)|\s+|-/g,'');
-	return this.optional(element) || phone_number.length > 9 &&
-		phone_number.match(/^(?:(?:(?:00\s?|\+)44\s?)|(?:\(?0))(?:(?:\d{5}\)?\s?\d{4,5})|(?:\d{4}\)?\s?(?:\d{5}|\d{3}\s?\d{3}))|(?:\d{3}\)?\s?\d{3}\s?\d{3,4})|(?:\d{2}\)?\s?\d{4}\s?\d{4}))$/);
-}, 'Please specify a valid phone number');
-
-jQuery.validator.addMethod('mobileUK', function(phone_number, element) {
-	phone_number = phone_number.replace(/\s+|-/g,'');
-	return this.optional(element) || phone_number.length > 9 &&
-		phone_number.match(/^(?:(?:(?:00\s?|\+)44\s?|0)7(?:[45789]\d{2}|624)\s?\d{3}\s?\d{3})$/);
-}, 'Please specify a valid mobile number');
-
-//Matches UK landline + mobile, accepting only 01-3 for landline or 07 for mobile to exclude many premium numbers
-jQuery.validator.addMethod('phonesUK', function(phone_number, element) {
-	phone_number = phone_number.replace(/\s+|-/g,'');
-	return this.optional(element) || phone_number.length > 9 &&
-		phone_number.match(/^(?:(?:(?:00\s?|\+)44\s?|0)(?:1\d{8,9}|[23]\d{9}|7(?:[45789]\d{8}|624\d{6})))$/);
-}, 'Please specify a valid uk phone number');
-// On the above three UK functions, do the following server side processing:
-//  Compare with ^((?:00\s?|\+)(44)\s?)?\(?0?(?:\)\s?)?([1-9]\d{1,4}\)?[\d\s]+)
-//  Extract $2 and set $prefix to '+44<space>' if $2 is '44' otherwise set $prefix to '0'
-//  Extract $3 and remove spaces and parentheses. Phone number is combined $2 and $3.
-// A number of very detailed GB telephone number RegEx patterns can also be found at:
-// http://www.aa-asterisk.org.uk/index.php/Regular_Expressions_for_Validating_and_Formatting_UK_Telephone_Numbers
-
-//Matches UK postcode. based on http://snipplr.com/view/3152/postcode-validation/
-jQuery.validator.addMethod('postcodeUK', function(postcode, element) {
-	postcode = (postcode.toUpperCase()).replace(/\s+/g,'');
-	return this.optional(element) || postcode.match(/^([^QZ][^IJZ]{0,1}\d{1,2})(\d[^CIKMOV]{2})$/) || postcode.match(/^([^QV]\d[ABCDEFGHJKSTUW])(\d[^CIKMOV]{2})$/) || postcode.match(/^([^QV][^IJZ]\d[ABEHMNPRVWXY])(\d[^CIKMOV]{2})$/) || postcode.match(/^(GIR)(0AA)$/) || postcode.match(/^(BFPO)(\d{1,4})$/) || postcode.match(/^(BFPO)(C\/O\d{1,3})$/);
-}, 'Please specify a valid postcode');
-
-// TODO check if value starts with <, otherwise don't try stripping anything
-jQuery.validator.addMethod("strippedminlength", function(value, element, param) {
-	return jQuery(value).text().length >= param;
-}, jQuery.validator.format("Please enter at least {0} characters"));
-
-// same as email, but TLD is optional
-jQuery.validator.addMethod("email2", function(value, element, param) {
-	return this.optional(element) || /^((([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+(\.([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+)*)|((\x22)((((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(([\x01-\x08\x0b\x0c\x0e-\x1f\x7f]|\x21|[\x23-\x5b]|[\x5d-\x7e]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(\\([\x01-\x09\x0b\x0c\x0d-\x7f]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]))))*(((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(\x22)))@((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)*(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.?$/i.test(value);
-}, jQuery.validator.messages.email);
-
-// same as url, but TLD is optional
-jQuery.validator.addMethod("url2", function(value, element, param) {
-	return this.optional(element) || /^(https?|ftp):\/\/(((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:)*@)?(((\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5]))|((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)*(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.?)(:\d*)?)(\/((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)+(\/(([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)*)*)?)?(\?((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|[\uE000-\uF8FF]|\/|\?)*)?(\#((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|\/|\?)*)?$/i.test(value);
-}, jQuery.validator.messages.url);
-
-// NOTICE: Modified version of Castle.Components.Validator.CreditCardValidator
-// Redistributed under the the Apache License 2.0 at http://www.apache.org/licenses/LICENSE-2.0
-// Valid Types: mastercard, visa, amex, dinersclub, enroute, discover, jcb, unknown, all (overrides all other settings)
-jQuery.validator.addMethod("creditcardtypes", function(value, element, param) {
-	if (/[^0-9-]+/.test(value)) {
-		return false;
-	}
-
-	value = value.replace(/\D/g, "");
-
-	var validTypes = 0x0000;
-
-	if (param.mastercard)
-		validTypes |= 0x0001;
-	if (param.visa)
-		validTypes |= 0x0002;
-	if (param.amex)
-		validTypes |= 0x0004;
-	if (param.dinersclub)
-		validTypes |= 0x0008;
-	if (param.enroute)
-		validTypes |= 0x0010;
-	if (param.discover)
-		validTypes |= 0x0020;
-	if (param.jcb)
-		validTypes |= 0x0040;
-	if (param.unknown)
-		validTypes |= 0x0080;
-	if (param.all)
-		validTypes = 0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0080;
-
-	if (validTypes & 0x0001 && /^(5[12345])/.test(value)) { //mastercard
-		return value.length == 16;
-	}
-	if (validTypes & 0x0002 && /^(4)/.test(value)) { //visa
-		return value.length == 16;
-	}
-	if (validTypes & 0x0004 && /^(3[47])/.test(value)) { //amex
-		return value.length == 15;
-	}
-	if (validTypes & 0x0008 && /^(3(0[012345]|[68]))/.test(value)) { //dinersclub
-		return value.length == 14;
-	}
-	if (validTypes & 0x0010 && /^(2(014|149))/.test(value)) { //enroute
-		return value.length == 15;
-	}
-	if (validTypes & 0x0020 && /^(6011)/.test(value)) { //discover
-		return value.length == 16;
-	}
-	if (validTypes & 0x0040 && /^(3)/.test(value)) { //jcb
-		return value.length == 16;
-	}
-	if (validTypes & 0x0040 && /^(2131|1800)/.test(value)) { //jcb
-		return value.length == 15;
-	}
-	if (validTypes & 0x0080) { //unknown
-		return true;
-	}
-	return false;
-}, "Please enter a valid credit card number.");
-
-jQuery.validator.addMethod("ipv4", function(value, element, param) {
-		return this.optional(element) || /^(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)$/i.test(value);
-}, "Please enter a valid IP v4 address.");
-
-jQuery.validator.addMethod("ipv6", function(value, element, param) {
-		return this.optional(element) || /^((([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){6}:[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){5}:([0-9A-Fa-f]{1,4}:)?[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){4}:([0-9A-Fa-f]{1,4}:){0,2}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){3}:([0-9A-Fa-f]{1,4}:){0,3}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){2}:([0-9A-Fa-f]{1,4}:){0,4}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){6}((\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b)\.){3}(\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b))|(([0-9A-Fa-f]{1,4}:){0,5}:((\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b)\.){3}(\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b))|(::([0-9A-Fa-f]{1,4}:){0,5}((\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b)\.){3}(\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b))|([0-9A-Fa-f]{1,4}::([0-9A-Fa-f]{1,4}:){0,5}[0-9A-Fa-f]{1,4})|(::([0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){1,7}:))$/i.test(value);
-}, "Please enter a valid IP v6 address.");
-
-/**
-* Return true if the field value matches the given format RegExp
-*
-* @example jQuery.validator.methods.pattern("AR1004",element,/^AR\d{4}$/)
-* @result true
-*
-* @example jQuery.validator.methods.pattern("BR1004",element,/^AR\d{4}$/)
-* @result false
-*
-* @name jQuery.validator.methods.pattern
-* @type Boolean
-* @cat Plugins/Validate/Methods
-*/
-jQuery.validator.addMethod("pattern", function(value, element, param) {
-	if (this.optional(element)) {
-		return true;
-	}
-	if (typeof param === 'string') {
-		param = new RegExp('^(?:' + param + ')$');
-	}
-	return param.test(value);
-}, "Invalid format.");
-
-
-/*
- * Lets you say "at least X inputs that match selector Y must be filled."
- *
- * The end result is that neither of these inputs:
- *
- *  <input class="productinfo" name="partnumber">
- *  <input class="productinfo" name="description">
- *
- *  ...will validate unless at least one of them is filled.
- *
- * partnumber:  {require_from_group: [1,".productinfo"]},
- * description: {require_from_group: [1,".productinfo"]}
- *
- */
-jQuery.validator.addMethod("require_from_group", function(value, element, options) {
-	var validator = this;
-	var selector = options[1];
-	var validOrNot = $(selector, element.form).filter(function() {
-		return validator.elementValue(this);
-	}).length >= options[0];
-
-	if(!$(element).data('being_validated')) {
-		var fields = $(selector, element.form);
-		fields.data('being_validated', true);
-		fields.valid();
-		fields.data('being_validated', false);
-	}
-	return validOrNot;
-}, jQuery.format("Please fill at least {0} of these fields."));
-
-/*
- * Lets you say "either at least X inputs that match selector Y must be filled,
- * OR they must all be skipped (left blank)."
- *
- * The end result, is that none of these inputs:
- *
- *  <input class="productinfo" name="partnumber">
- *  <input class="productinfo" name="description">
- *  <input class="productinfo" name="color">
- *
- *  ...will validate unless either at least two of them are filled,
- *  OR none of them are.
- *
- * partnumber:  {skip_or_fill_minimum: [2,".productinfo"]},
- *  description: {skip_or_fill_minimum: [2,".productinfo"]},
- * color:       {skip_or_fill_minimum: [2,".productinfo"]}
- *
- */
-jQuery.validator.addMethod("skip_or_fill_minimum", function(value, element, options) {
-	var validator = this;
-
-	numberRequired = options[0];
-	selector = options[1];
-	var numberFilled = $(selector, element.form).filter(function() {
-		return validator.elementValue(this);
-	}).length;
-	var valid = numberFilled >= numberRequired || numberFilled === 0;
-
-	if(!$(element).data('being_validated')) {
-		var fields = $(selector, element.form);
-		fields.data('being_validated', true);
-		fields.valid();
-		fields.data('being_validated', false);
-	}
-	return valid;
-}, jQuery.format("Please either skip these fields or fill at least {0} of them."));
-
-// Accept a value from a file input based on a required mimetype
-jQuery.validator.addMethod("accept", function(value, element, param) {
-	// Split mime on commas incase we have multiple types we can accept
-	var typeParam = typeof param === "string" ? param.replace(/,/g, '|') : "image/*",
-	optionalValue = this.optional(element),
-	i, file;
-
-	// Element is optional
-	if(optionalValue) {
-		return optionalValue;
-	}
-
-	if($(element).attr("type") === "file") {
-		// If we are using a wildcard, make it regex friendly
-		typeParam = typeParam.replace("*", ".*");
-
-		// Check if the element has a FileList before checking each file
-		if(element.files && element.files.length) {
-			for(i = 0; i < element.files.length; i++) {
-				file = element.files[i];
-
-				// Grab the mimtype from the loaded file, verify it matches
-				if(!file.type.match(new RegExp( ".?(" + typeParam + ")$", "i"))) {
-					return false;
-				}
-			}
-		}
-	}
-
-	// Either return true because we've validated each file, or because the
-	// browser does not support element.files and the FileList feature
-	return true;
-}, jQuery.format("Please enter a value with a valid mimetype."));
-
-// Older "accept" file extension method. Old docs: http://docs.jquery.com/Plugins/Validation/Methods/accept
-jQuery.validator.addMethod("extension", function(value, element, param) {
-	param = typeof param === "string" ? param.replace(/,/g, '|') : "png|jpe?g|gif";
-	return this.optional(element) || value.match(new RegExp(".(" + param + ")$", "i"));
-}, jQuery.format("Please enter a value with a valid extension."));
-
-define("jquery_validate_additional_methods", ["jquery_validate"], function(){});
-
 /*!
  * Modernizr v2.0.6
  * http://www.modernizr.com
@@ -18899,6 +11464,4018 @@ window.Modernizr = (function( window, document, undefined ) {
 
 define("modernizr", function(){});
 
+//
+// LESS - Leaner CSS v1.3.1
+// http://lesscss.org
+// 
+// Copyright (c) 2009-2011, Alexis Sellier
+// Licensed under the Apache 2.0 License.
+//
+(function (window, undefined) {
+//
+// Stub out `require` in the browser
+//
+function require(arg) {
+    return window.less[arg.split('/')[1]];
+};
+
+
+// ecma-5.js
+//
+// -- kriskowal Kris Kowal Copyright (C) 2009-2010 MIT License
+// -- tlrobinson Tom Robinson
+// dantman Daniel Friesen
+
+//
+// Array
+//
+if (!Array.isArray) {
+    Array.isArray = function(obj) {
+        return Object.prototype.toString.call(obj) === "[object Array]" ||
+               (obj instanceof Array);
+    };
+}
+if (!Array.prototype.forEach) {
+    Array.prototype.forEach =  function(block, thisObject) {
+        var len = this.length >>> 0;
+        for (var i = 0; i < len; i++) {
+            if (i in this) {
+                block.call(thisObject, this[i], i, this);
+            }
+        }
+    };
+}
+if (!Array.prototype.map) {
+    Array.prototype.map = function(fun /*, thisp*/) {
+        var len = this.length >>> 0;
+        var res = new Array(len);
+        var thisp = arguments[1];
+
+        for (var i = 0; i < len; i++) {
+            if (i in this) {
+                res[i] = fun.call(thisp, this[i], i, this);
+            }
+        }
+        return res;
+    };
+}
+if (!Array.prototype.filter) {
+    Array.prototype.filter = function (block /*, thisp */) {
+        var values = [];
+        var thisp = arguments[1];
+        for (var i = 0; i < this.length; i++) {
+            if (block.call(thisp, this[i])) {
+                values.push(this[i]);
+            }
+        }
+        return values;
+    };
+}
+if (!Array.prototype.reduce) {
+    Array.prototype.reduce = function(fun /*, initial*/) {
+        var len = this.length >>> 0;
+        var i = 0;
+
+        // no value to return if no initial value and an empty array
+        if (len === 0 && arguments.length === 1) throw new TypeError();
+
+        if (arguments.length >= 2) {
+            var rv = arguments[1];
+        } else {
+            do {
+                if (i in this) {
+                    rv = this[i++];
+                    break;
+                }
+                // if array contains no values, no initial value to return
+                if (++i >= len) throw new TypeError();
+            } while (true);
+        }
+        for (; i < len; i++) {
+            if (i in this) {
+                rv = fun.call(null, rv, this[i], i, this);
+            }
+        }
+        return rv;
+    };
+}
+if (!Array.prototype.indexOf) {
+    Array.prototype.indexOf = function (value /*, fromIndex */ ) {
+        var length = this.length;
+        var i = arguments[1] || 0;
+
+        if (!length)     return -1;
+        if (i >= length) return -1;
+        if (i < 0)       i += length;
+
+        for (; i < length; i++) {
+            if (!Object.prototype.hasOwnProperty.call(this, i)) { continue }
+            if (value === this[i]) return i;
+        }
+        return -1;
+    };
+}
+
+//
+// Object
+//
+if (!Object.keys) {
+    Object.keys = function (object) {
+        var keys = [];
+        for (var name in object) {
+            if (Object.prototype.hasOwnProperty.call(object, name)) {
+                keys.push(name);
+            }
+        }
+        return keys;
+    };
+}
+
+//
+// String
+//
+if (!String.prototype.trim) {
+    String.prototype.trim = function () {
+        return String(this).replace(/^\s\s*/, '').replace(/\s\s*$/, '');
+    };
+}
+var less, tree;
+
+if (typeof environment === "object" && ({}).toString.call(environment) === "[object Environment]") {
+    // Rhino
+    // Details on how to detect Rhino: https://github.com/ringo/ringojs/issues/88
+    if (typeof(window) === 'undefined') { less = {} }
+    else                                { less = window.less = {} }
+    tree = less.tree = {};
+    less.mode = 'rhino';
+} else if (typeof(window) === 'undefined') {
+    // Node.js
+    less = exports,
+    tree = require('./tree');
+    less.mode = 'node';
+} else {
+    // Browser
+    if (typeof(window.less) === 'undefined') { window.less = {} }
+    less = window.less,
+    tree = window.less.tree = {};
+    less.mode = 'browser';
+}
+//
+// less.js - parser
+//
+//    A relatively straight-forward predictive parser.
+//    There is no tokenization/lexing stage, the input is parsed
+//    in one sweep.
+//
+//    To make the parser fast enough to run in the browser, several
+//    optimization had to be made:
+//
+//    - Matching and slicing on a huge input is often cause of slowdowns.
+//      The solution is to chunkify the input into smaller strings.
+//      The chunks are stored in the `chunks` var,
+//      `j` holds the current chunk index, and `current` holds
+//      the index of the current chunk in relation to `input`.
+//      This gives us an almost 4x speed-up.
+//
+//    - In many cases, we don't need to match individual tokens;
+//      for example, if a value doesn't hold any variables, operations
+//      or dynamic references, the parser can effectively 'skip' it,
+//      treating it as a literal.
+//      An example would be '1px solid #000' - which evaluates to itself,
+//      we don't need to know what the individual components are.
+//      The drawback, of course is that you don't get the benefits of
+//      syntax-checking on the CSS. This gives us a 50% speed-up in the parser,
+//      and a smaller speed-up in the code-gen.
+//
+//
+//    Token matching is done with the `$` function, which either takes
+//    a terminal string or regexp, or a non-terminal function to call.
+//    It also takes care of moving all the indices forwards.
+//
+//
+less.Parser = function Parser(env) {
+    var input,       // LeSS input string
+        i,           // current index in `input`
+        j,           // current chunk
+        temp,        // temporarily holds a chunk's state, for backtracking
+        memo,        // temporarily holds `i`, when backtracking
+        furthest,    // furthest index the parser has gone to
+        chunks,      // chunkified input
+        current,     // index of current chunk, in `input`
+        parser;
+
+    var that = this;
+
+    // Top parser on an import tree must be sure there is one "env"
+    // which will then be passed arround by reference.
+    var env = env || { };
+    if (!env.contents) { env.contents={}; }  // env.contents must be passed arround with top env
+
+    // This function is called after all files
+    // have been imported through `@import`.
+    var finish = function () {};
+
+    var imports = this.imports = {
+        paths: env && env.paths || [],  // Search paths, when importing
+        queue: [],                      // Files which haven't been imported yet
+        files: {},                      // Holds the imported parse trees
+        contents: env.contents,         // Holds the imported file contents
+        mime:  env && env.mime,         // MIME type of .less files
+        error: null,                    // Error in parsing/evaluating an import
+        push: function (path, callback) {
+            var that = this;
+            this.queue.push(path);
+
+            //
+            // Import a file asynchronously
+            //
+            less.Parser.importer(path, this.paths, function (e, root) {
+                that.queue.splice(that.queue.indexOf(path), 1); // Remove the path from the queue
+
+                var imported = path in that.files;
+
+                that.files[path] = root;                        // Store the root
+
+                if (e && !that.error) { that.error = e }
+
+                callback(e, root, imported);
+
+                if (that.queue.length === 0) { finish(e) }       // Call `finish` if we're done importing
+            }, env);
+        }
+    };
+
+    function save()    { temp = chunks[j], memo = i, current = i }
+    function restore() { chunks[j] = temp, i = memo, current = i }
+
+    function sync() {
+        if (i > current) {
+            chunks[j] = chunks[j].slice(i - current);
+            current = i;
+        }
+    }
+    function isWhitespace(c) {
+        // Could change to \s?
+        var code = c.charCodeAt(0);
+        return code === 32 || code === 10 || code === 9;
+    }
+    //
+    // Parse from a token, regexp or string, and move forward if match
+    //
+    function $(tok) {
+        var match, args, length, index, k;
+
+        //
+        // Non-terminal
+        //
+        if (tok instanceof Function) {
+            return tok.call(parser.parsers);
+        //
+        // Terminal
+        //
+        //     Either match a single character in the input,
+        //     or match a regexp in the current chunk (chunk[j]).
+        //
+        } else if (typeof(tok) === 'string') {
+            match = input.charAt(i) === tok ? tok : null;
+            length = 1;
+            sync ();
+        } else {
+            sync ();
+
+            if (match = tok.exec(chunks[j])) {
+                length = match[0].length;
+            } else {
+                return null;
+            }
+        }
+
+        // The match is confirmed, add the match length to `i`,
+        // and consume any extra white-space characters (' ' || '\n')
+        // which come after that. The reason for this is that LeSS's
+        // grammar is mostly white-space insensitive.
+        //
+        if (match) {
+            skipWhitespace(length);
+
+            if(typeof(match) === 'string') {
+                return match;
+            } else {
+                return match.length === 1 ? match[0] : match;
+            }
+        }
+    }
+
+    function skipWhitespace(length) {
+        var oldi = i, oldj = j,
+            endIndex = i + chunks[j].length,
+            mem = i += length;
+
+        while (i < endIndex) {
+            if (! isWhitespace(input.charAt(i))) { break }
+            i++;
+        }
+        chunks[j] = chunks[j].slice(length + (i - mem));
+        current = i;
+
+        if (chunks[j].length === 0 && j < chunks.length - 1) { j++ }
+
+        return oldi !== i || oldj !== j;
+    }
+
+    function expect(arg, msg) {
+        var result = $(arg);
+        if (! result) {
+            error(msg || (typeof(arg) === 'string' ? "expected '" + arg + "' got '" + input.charAt(i) + "'"
+                                                   : "unexpected token"));
+        } else {
+            return result;
+        }
+    }
+
+    function error(msg, type) {
+        throw { index: i, type: type || 'Syntax', message: msg };
+    }
+
+    // Same as $(), but don't change the state of the parser,
+    // just return the match.
+    function peek(tok) {
+        if (typeof(tok) === 'string') {
+            return input.charAt(i) === tok;
+        } else {
+            if (tok.test(chunks[j])) {
+                return true;
+            } else {
+                return false;
+            }
+        }
+    }
+
+    function getInput(e, env) {
+        if (e.filename && env.filename && (e.filename !== env.filename)) {
+            return parser.imports.contents[e.filename];
+        } else {
+            return input;
+        }
+    }
+
+    function getLocation(index, input) {
+        for (var n = index, column = -1;
+                 n >= 0 && input.charAt(n) !== '\n';
+                 n--) { column++ }
+
+        return { line:   typeof(index) === 'number' ? (input.slice(0, index).match(/\n/g) || "").length : null,
+                 column: column };
+    }
+
+    function getFileName(e) {
+        if(less.mode === 'browser' || less.mode === 'rhino')
+            return e.filename;
+        else
+            return require('path').resolve(e.filename);
+    }
+
+    function getDebugInfo(index, inputStream, e) {
+        return {
+            lineNumber: getLocation(index, inputStream).line + 1,
+            fileName: getFileName(e)
+        };
+    }
+
+    function LessError(e, env) {
+        var input = getInput(e, env),
+            loc = getLocation(e.index, input),
+            line = loc.line,
+            col  = loc.column,
+            lines = input.split('\n');
+
+        this.type = e.type || 'Syntax';
+        this.message = e.message;
+        this.filename = e.filename || env.filename;
+        this.index = e.index;
+        this.line = typeof(line) === 'number' ? line + 1 : null;
+        this.callLine = e.call && (getLocation(e.call, input).line + 1);
+        this.callExtract = lines[getLocation(e.call, input).line];
+        this.stack = e.stack;
+        this.column = col;
+        this.extract = [
+            lines[line - 1],
+            lines[line],
+            lines[line + 1]
+        ];
+    }
+
+    this.env = env = env || {};
+
+    // The optimization level dictates the thoroughness of the parser,
+    // the lower the number, the less nodes it will create in the tree.
+    // This could matter for debugging, or if you want to access
+    // the individual nodes in the tree.
+    this.optimization = ('optimization' in this.env) ? this.env.optimization : 1;
+
+    this.env.filename = this.env.filename || null;
+
+    //
+    // The Parser
+    //
+    return parser = {
+
+        imports: imports,
+        //
+        // Parse an input string into an abstract syntax tree,
+        // call `callback` when done.
+        //
+        parse: function (str, callback) {
+            var root, start, end, zone, line, lines, buff = [], c, error = null;
+
+            i = j = current = furthest = 0;
+            input = str.replace(/\r\n/g, '\n');
+
+            // Remove potential UTF Byte Order Mark
+            input = input.replace(/^\uFEFF/, '');
+
+            // Split the input into chunks.
+            chunks = (function (chunks) {
+                var j = 0,
+                    skip = /(?:@\{[\w-]+\}|[^"'`\{\}\/\(\)\\])+/g,
+                    comment = /\/\*(?:[^*]|\*+[^\/*])*\*+\/|\/\/.*/g,
+                    string = /"((?:[^"\\\r\n]|\\.)*)"|'((?:[^'\\\r\n]|\\.)*)'|`((?:[^`]|\\.)*)`/g,
+                    level = 0,
+                    match,
+                    chunk = chunks[0],
+                    inParam;
+
+                for (var i = 0, c, cc; i < input.length; i++) {
+                    skip.lastIndex = i;
+                    if (match = skip.exec(input)) {
+                        if (match.index === i) {
+                            i += match[0].length;
+                            chunk.push(match[0]);
+                        }
+                    }
+                    c = input.charAt(i);
+                    comment.lastIndex = string.lastIndex = i;
+
+                    if (match = string.exec(input)) {
+                        if (match.index === i) {
+                            i += match[0].length;
+                            chunk.push(match[0]);
+                            c = input.charAt(i);
+                        }
+                    }
+
+                    if (!inParam && c === '/') {
+                        cc = input.charAt(i + 1);
+                        if (cc === '/' || cc === '*') {
+                            if (match = comment.exec(input)) {
+                                if (match.index === i) {
+                                    i += match[0].length;
+                                    chunk.push(match[0]);
+                                    c = input.charAt(i);
+                                }
+                            }
+                        }
+                    }
+                    
+                    switch (c) {
+                        case '{': if (! inParam) { level ++;        chunk.push(c);                           break }
+                        case '}': if (! inParam) { level --;        chunk.push(c); chunks[++j] = chunk = []; break }
+                        case '(': if (! inParam) { inParam = true;  chunk.push(c);                           break }
+                        case ')': if (  inParam) { inParam = false; chunk.push(c);                           break }
+                        default:                                    chunk.push(c);
+                    }
+                }
+                if (level > 0) {
+                    error = new(LessError)({
+                        index: i,
+                        type: 'Parse',
+                        message: "missing closing `}`",
+                        filename: env.filename
+                    }, env);
+                }
+
+                return chunks.map(function (c) { return c.join('') });;
+            })([[]]);
+
+            if (error) {
+                return callback(error);
+            }
+
+            // Start with the primary rule.
+            // The whole syntax tree is held under a Ruleset node,
+            // with the `root` property set to true, so no `{}` are
+            // output. The callback is called when the input is parsed.
+            try {
+                root = new(tree.Ruleset)([], $(this.parsers.primary));
+                root.root = true;
+            } catch (e) {
+                return callback(new(LessError)(e, env));
+            }
+
+            root.toCSS = (function (evaluate) {
+                var line, lines, column;
+
+                return function (options, variables) {
+                    var frames = [], importError;
+
+                    options = options || {};
+                    //
+                    // Allows setting variables with a hash, so:
+                    //
+                    //   `{ color: new(tree.Color)('#f01') }` will become:
+                    //
+                    //   new(tree.Rule)('@color',
+                    //     new(tree.Value)([
+                    //       new(tree.Expression)([
+                    //         new(tree.Color)('#f01')
+                    //       ])
+                    //     ])
+                    //   )
+                    //
+                    if (typeof(variables) === 'object' && !Array.isArray(variables)) {
+                        variables = Object.keys(variables).map(function (k) {
+                            var value = variables[k];
+
+                            if (! (value instanceof tree.Value)) {
+                                if (! (value instanceof tree.Expression)) {
+                                    value = new(tree.Expression)([value]);
+                                }
+                                value = new(tree.Value)([value]);
+                            }
+                            return new(tree.Rule)('@' + k, value, false, 0);
+                        });
+                        frames = [new(tree.Ruleset)(null, variables)];
+                    }
+
+                    try {
+                        var css = evaluate.call(this, { frames: frames })
+                                          .toCSS([], { compress: options.compress || false, dumpLineNumbers: env.dumpLineNumbers });
+                    } catch (e) {
+                        throw new(LessError)(e, env);
+                    }
+
+                    if ((importError = parser.imports.error)) { // Check if there was an error during importing
+                        if (importError instanceof LessError) throw importError;
+                        else                                  throw new(LessError)(importError, env);
+                    }
+
+                    if (options.yuicompress && less.mode === 'node') {
+                        return require('./cssmin').compressor.cssmin(css);
+                    } else if (options.compress) {
+                        return css.replace(/(\s)+/g, "$1");
+                    } else {
+                        return css;
+                    }
+                };
+            })(root.eval);
+
+            // If `i` is smaller than the `input.length - 1`,
+            // it means the parser wasn't able to parse the whole
+            // string, so we've got a parsing error.
+            //
+            // We try to extract a \n delimited string,
+            // showing the line where the parse error occured.
+            // We split it up into two parts (the part which parsed,
+            // and the part which didn't), so we can color them differently.
+            if (i < input.length - 1) {
+                i = furthest;
+                lines = input.split('\n');
+                line = (input.slice(0, i).match(/\n/g) || "").length + 1;
+
+                for (var n = i, column = -1; n >= 0 && input.charAt(n) !== '\n'; n--) { column++ }
+
+                error = {
+                    type: "Parse",
+                    message: "Syntax Error on line " + line,
+                    index: i,
+                    filename: env.filename,
+                    line: line,
+                    column: column,
+                    extract: [
+                        lines[line - 2],
+                        lines[line - 1],
+                        lines[line]
+                    ]
+                };
+            }
+
+            if (this.imports.queue.length > 0) {
+                finish = function (e) {
+                    if (e) callback(e);
+                    else callback(null, root);
+                };
+            } else {
+                callback(error, root);
+            }
+        },
+
+        //
+        // Here in, the parsing rules/functions
+        //
+        // The basic structure of the syntax tree generated is as follows:
+        //
+        //   Ruleset ->  Rule -> Value -> Expression -> Entity
+        //
+        // Here's some LESS code:
+        //
+        //    .class {
+        //      color: #fff;
+        //      border: 1px solid #000;
+        //      width: @w + 4px;
+        //      > .child {...}
+        //    }
+        //
+        // And here's what the parse tree might look like:
+        //
+        //     Ruleset (Selector '.class', [
+        //         Rule ("color",  Value ([Expression [Color #fff]]))
+        //         Rule ("border", Value ([Expression [Dimension 1px][Keyword "solid"][Color #000]]))
+        //         Rule ("width",  Value ([Expression [Operation "+" [Variable "@w"][Dimension 4px]]]))
+        //         Ruleset (Selector [Element '>', '.child'], [...])
+        //     ])
+        //
+        //  In general, most rules will try to parse a token with the `$()` function, and if the return
+        //  value is truly, will return a new node, of the relevant type. Sometimes, we need to check
+        //  first, before parsing, that's when we use `peek()`.
+        //
+        parsers: {
+            //
+            // The `primary` rule is the *entry* and *exit* point of the parser.
+            // The rules here can appear at any level of the parse tree.
+            //
+            // The recursive nature of the grammar is an interplay between the `block`
+            // rule, which represents `{ ... }`, the `ruleset` rule, and this `primary` rule,
+            // as represented by this simplified grammar:
+            //
+            //     primary  →  (ruleset | rule)+
+            //     ruleset  →  selector+ block
+            //     block    →  '{' primary '}'
+            //
+            // Only at one point is the primary rule not called from the
+            // block rule: at the root level.
+            //
+            primary: function () {
+                var node, root = [];
+
+                while ((node = $(this.mixin.definition) || $(this.rule)    ||  $(this.ruleset) ||
+                               $(this.mixin.call)       || $(this.comment) ||  $(this.directive))
+                               || $(/^[\s\n]+/)) {
+                    node && root.push(node);
+                }
+                return root;
+            },
+
+            // We create a Comment node for CSS comments `/* */`,
+            // but keep the LeSS comments `//` silent, by just skipping
+            // over them.
+            comment: function () {
+                var comment;
+
+                if (input.charAt(i) !== '/') return;
+
+                if (input.charAt(i + 1) === '/') {
+                    return new(tree.Comment)($(/^\/\/.*/), true);
+                } else if (comment = $(/^\/\*(?:[^*]|\*+[^\/*])*\*+\/\n?/)) {
+                    return new(tree.Comment)(comment);
+                }
+            },
+
+            //
+            // Entities are tokens which can be found inside an Expression
+            //
+            entities: {
+                //
+                // A string, which supports escaping " and '
+                //
+                //     "milky way" 'he\'s the one!'
+                //
+                quoted: function () {
+                    var str, j = i, e;
+
+                    if (input.charAt(j) === '~') { j++, e = true } // Escaped strings
+                    if (input.charAt(j) !== '"' && input.charAt(j) !== "'") return;
+
+                    e && $('~');
+
+                    if (str = $(/^"((?:[^"\\\r\n]|\\.)*)"|'((?:[^'\\\r\n]|\\.)*)'/)) {
+                        return new(tree.Quoted)(str[0], str[1] || str[2], e);
+                    }
+                },
+
+                //
+                // A catch-all word, such as:
+                //
+                //     black border-collapse
+                //
+                keyword: function () {
+                    var k;
+
+                    if (k = $(/^[_A-Za-z-][_A-Za-z0-9-]*/)) {
+                        if (tree.colors.hasOwnProperty(k)) {
+                            // detect named color
+                            return new(tree.Color)(tree.colors[k].slice(1));
+                        } else {
+                            return new(tree.Keyword)(k);
+                        }
+                    }
+                },
+
+                //
+                // A function call
+                //
+                //     rgb(255, 0, 255)
+                //
+                // We also try to catch IE's `alpha()`, but let the `alpha` parser
+                // deal with the details.
+                //
+                // The arguments are parsed with the `entities.arguments` parser.
+                //
+                call: function () {
+                    var name, nameLC, args, alpha_ret, index = i;
+
+                    if (! (name = /^([\w-]+|%|progid:[\w\.]+)\(/.exec(chunks[j]))) return;
+
+                    name = name[1];
+                    nameLC = name.toLowerCase();
+
+                    if (nameLC === 'url') { return null }
+                    else                { i += name.length }
+
+                    if (nameLC === 'alpha') {
+                        alpha_ret = $(this.alpha);
+                        if(typeof alpha_ret !== 'undefined') {
+                            return alpha_ret;
+                        }
+                    }
+
+                    $('('); // Parse the '(' and consume whitespace.
+
+                    args = $(this.entities.arguments);
+
+                    if (! $(')')) return;
+
+                    if (name) { return new(tree.Call)(name, args, index, env.filename) }
+                },
+                arguments: function () {
+                    var args = [], arg;
+
+                    while (arg = $(this.entities.assignment) || $(this.expression)) {
+                        args.push(arg);
+                        if (! $(',')) { break }
+                    }
+                    return args;
+                },
+                literal: function () {
+                    return $(this.entities.ratio) ||
+                           $(this.entities.dimension) ||
+                           $(this.entities.color) ||
+                           $(this.entities.quoted);
+                },
+
+                // Assignments are argument entities for calls.
+                // They are present in ie filter properties as shown below.
+                //
+                //     filter: progid:DXImageTransform.Microsoft.Alpha( *opacity=50* )
+                //
+
+                assignment: function () {
+                    var key, value;
+                    if ((key = $(/^\w+(?=\s?=)/i)) && $('=') && (value = $(this.entity))) {
+                        return new(tree.Assignment)(key, value);
+                    }
+                },
+
+                //
+                // Parse url() tokens
+                //
+                // We use a specific rule for urls, because they don't really behave like
+                // standard function calls. The difference is that the argument doesn't have
+                // to be enclosed within a string, so it can't be parsed as an Expression.
+                //
+                url: function () {
+                    var value;
+
+                    if (input.charAt(i) !== 'u' || !$(/^url\(/)) return;
+                    value = $(this.entities.quoted)  || $(this.entities.variable) ||
+                            $(/^(?:(?:\\[\(\)'"])|[^\(\)'"])+/) || "";
+
+                    expect(')');
+
+                    return new(tree.URL)((value.value != null || value instanceof tree.Variable)
+                                        ? value : new(tree.Anonymous)(value), imports.paths);
+                },
+
+                //
+                // A Variable entity, such as `@fink`, in
+                //
+                //     width: @fink + 2px
+                //
+                // We use a different parser for variable definitions,
+                // see `parsers.variable`.
+                //
+                variable: function () {
+                    var name, index = i;
+
+                    if (input.charAt(i) === '@' && (name = $(/^@@?[\w-]+/))) {
+                        return new(tree.Variable)(name, index, env.filename);
+                    }
+                },
+
+                // A variable entity useing the protective {} e.g. @{var}
+                variableCurly: function () {
+                    var name, curly, index = i;
+
+                    if (input.charAt(i) === '@' && (curly = $(/^@\{([\w-]+)\}/))) {
+                        return new(tree.Variable)("@" + curly[1], index, env.filename);
+                    }
+                },
+
+                //
+                // A Hexadecimal color
+                //
+                //     #4F3C2F
+                //
+                // `rgb` and `hsl` colors are parsed through the `entities.call` parser.
+                //
+                color: function () {
+                    var rgb;
+
+                    if (input.charAt(i) === '#' && (rgb = $(/^#([A-Fa-f0-9]{6}|[A-Fa-f0-9]{3})/))) {
+                        return new(tree.Color)(rgb[1]);
+                    }
+                },
+
+                //
+                // A Dimension, that is, a number and a unit
+                //
+                //     0.5em 95%
+                //
+                dimension: function () {
+                    var value, c = input.charCodeAt(i);
+                    if ((c > 57 || c < 45) || c === 47) return;
+
+                    if (value = $(/^(-?\d*\.?\d+)(px|%|em|pc|ex|in|deg|s|ms|pt|cm|mm|rad|grad|turn|dpi|dpcm|dppx|rem|vw|vh|vmin|vm|ch)?/)) {
+                        return new(tree.Dimension)(value[1], value[2]);
+                    }
+                },
+
+                //
+                // A Ratio
+                //
+                //    16/9
+                //
+                ratio: function () {
+                  var value, c = input.charCodeAt(i);
+                  if (c > 57 || c < 48) return;
+
+                  if (value = $(/^(\d+\/\d+)/)) {
+                    return new(tree.Ratio)(value[1]);
+                  }
+                },
+
+                //
+                // JavaScript code to be evaluated
+                //
+                //     `window.location.href`
+                //
+                javascript: function () {
+                    var str, j = i, e;
+
+                    if (input.charAt(j) === '~') { j++, e = true } // Escaped strings
+                    if (input.charAt(j) !== '`') { return }
+
+                    e && $('~');
+
+                    if (str = $(/^`([^`]*)`/)) {
+                        return new(tree.JavaScript)(str[1], i, e);
+                    }
+                }
+            },
+
+            //
+            // The variable part of a variable definition. Used in the `rule` parser
+            //
+            //     @fink:
+            //
+            variable: function () {
+                var name;
+
+                if (input.charAt(i) === '@' && (name = $(/^(@[\w-]+)\s*:/))) { return name[1] }
+            },
+
+            //
+            // A font size/line-height shorthand
+            //
+            //     small/12px
+            //
+            // We need to peek first, or we'll match on keywords and dimensions
+            //
+            shorthand: function () {
+                var a, b;
+
+                if (! peek(/^[@\w.%-]+\/[@\w.-]+/)) return;
+
+                save();
+
+                if ((a = $(this.entity)) && $('/') && (b = $(this.entity))) {
+                    return new(tree.Shorthand)(a, b);
+                }
+
+                restore();
+            },
+
+            //
+            // Mixins
+            //
+            mixin: {
+                //
+                // A Mixin call, with an optional argument list
+                //
+                //     #mixins > .square(#fff);
+                //     .rounded(4px, black);
+                //     .button;
+                //
+                // The `while` loop is there because mixins can be
+                // namespaced, but we only support the child and descendant
+                // selector for now.
+                //
+                call: function () {
+                    var elements = [], e, c, args = [], arg, index = i, s = input.charAt(i), name, value, important = false;
+
+                    if (s !== '.' && s !== '#') { return }
+                    
+                    save(); // stop us absorbing part of an invalid selector
+
+                    while (e = $(/^[#.](?:[\w-]|\\(?:[A-Fa-f0-9]{1,6} ?|[^A-Fa-f0-9]))+/)) {
+                        elements.push(new(tree.Element)(c, e, i));
+                        c = $('>');
+                    }
+                    if ($('(')) {
+                        while (arg = $(this.expression)) {
+                            value = arg;
+                            name = null;
+
+                            // Variable
+                            if (arg.value.length == 1) {
+                                var val = arg.value[0];
+                                if (val instanceof tree.Variable) {
+                                    if ($(':')) {
+                                        if (value = $(this.expression)) {
+                                            name = val.name;
+                                        } else {
+                                            throw new(Error)("Expected value");
+                                        }
+                                    }
+                                }
+                            }
+
+                            args.push({ name: name, value: value });
+
+                            if (! $(',')) { break }
+                        }
+                        if (! $(')')) throw new(Error)("Expected )");
+                    }
+
+                    if ($(this.important)) {
+                        important = true;
+                    }
+
+                    if (elements.length > 0 && ($(';') || peek('}'))) {
+                        return new(tree.mixin.Call)(elements, args, index, env.filename, important);
+                    }
+                    
+                    restore();
+                },
+
+                //
+                // A Mixin definition, with a list of parameters
+                //
+                //     .rounded (@radius: 2px, @color) {
+                //        ...
+                //     }
+                //
+                // Until we have a finer grained state-machine, we have to
+                // do a look-ahead, to make sure we don't have a mixin call.
+                // See the `rule` function for more information.
+                //
+                // We start by matching `.rounded (`, and then proceed on to
+                // the argument list, which has optional default values.
+                // We store the parameters in `params`, with a `value` key,
+                // if there is a value, such as in the case of `@radius`.
+                //
+                // Once we've got our params list, and a closing `)`, we parse
+                // the `{...}` block.
+                //
+                definition: function () {
+                    var name, params = [], match, ruleset, param, value, cond, variadic = false;
+                    if ((input.charAt(i) !== '.' && input.charAt(i) !== '#') ||
+                        peek(/^[^{]*(;|})/)) return;
+
+                    save();
+
+                    if (match = $(/^([#.](?:[\w-]|\\(?:[A-Fa-f0-9]{1,6} ?|[^A-Fa-f0-9]))+)\s*\(/)) {
+                        name = match[1];
+
+                        do {
+                            if (input.charAt(i) === '.' && $(/^\.{3}/)) {
+                                variadic = true;
+                                break;
+                            } else if (param = $(this.entities.variable) || $(this.entities.literal)
+                                                                         || $(this.entities.keyword)) {
+                                // Variable
+                                if (param instanceof tree.Variable) {
+                                    if ($(':')) {
+                                        value = expect(this.expression, 'expected expression');
+                                        params.push({ name: param.name, value: value });
+                                    } else if ($(/^\.{3}/)) {
+                                        params.push({ name: param.name, variadic: true });
+                                        variadic = true;
+                                        break;
+                                    } else {
+                                        params.push({ name: param.name });
+                                    }
+                                } else {
+                                    params.push({ value: param });
+                                }
+                            } else {
+                                break;
+                            }
+                        } while ($(','))
+
+                        // .mixincall("@{a}"); 
+                        // looks a bit like a mixin definition.. so we have to be nice and restore
+                        if (!$(')')) {
+                            furthest = i;
+                            restore();
+                        }
+
+                        if ($(/^when/)) { // Guard
+                            cond = expect(this.conditions, 'expected condition');
+                        }
+
+                        ruleset = $(this.block);
+
+                        if (ruleset) {
+                            return new(tree.mixin.Definition)(name, params, ruleset, cond, variadic);
+                        } else {
+                            restore();
+                        }
+                    }
+                }
+            },
+
+            //
+            // Entities are the smallest recognized token,
+            // and can be found inside a rule's value.
+            //
+            entity: function () {
+                return $(this.entities.literal) || $(this.entities.variable) || $(this.entities.url) ||
+                       $(this.entities.call)    || $(this.entities.keyword)  || $(this.entities.javascript) ||
+                       $(this.comment);
+            },
+
+            //
+            // A Rule terminator. Note that we use `peek()` to check for '}',
+            // because the `block` rule will be expecting it, but we still need to make sure
+            // it's there, if ';' was ommitted.
+            //
+            end: function () {
+                return $(';') || peek('}');
+            },
+
+            //
+            // IE's alpha function
+            //
+            //     alpha(opacity=88)
+            //
+            alpha: function () {
+                var value;
+
+                if (! $(/^\(opacity=/i)) return;
+                if (value = $(/^\d+/) || $(this.entities.variable)) {
+                    expect(')');
+                    return new(tree.Alpha)(value);
+                }
+            },
+
+            //
+            // A Selector Element
+            //
+            //     div
+            //     + h1
+            //     #socks
+            //     input[type="text"]
+            //
+            // Elements are the building blocks for Selectors,
+            // they are made out of a `Combinator` (see combinator rule),
+            // and an element name, such as a tag a class, or `*`.
+            //
+            element: function () {
+                var e, t, c, v;
+
+                c = $(this.combinator);
+
+                e = $(/^(?:\d+\.\d+|\d+)%/) || $(/^(?:[.#]?|:*)(?:[\w-]|[^\x00-\x9f]|\\(?:[A-Fa-f0-9]{1,6} ?|[^A-Fa-f0-9]))+/) ||
+                    $('*') || $('&') || $(this.attribute) || $(/^\([^)@]+\)/) || $(/^[\.#](?=@)/) || $(this.entities.variableCurly);
+
+                if (! e) {
+                    if ($('(') && (v = ($(this.entities.variableCurly) || $(this.entities.variable))) && $(')')) {
+                        e = new(tree.Paren)(v);
+                    }
+                }
+
+                if (e) { return new(tree.Element)(c, e, i) }
+            },
+
+            //
+            // Combinators combine elements together, in a Selector.
+            //
+            // Because our parser isn't white-space sensitive, special care
+            // has to be taken, when parsing the descendant combinator, ` `,
+            // as it's an empty space. We have to check the previous character
+            // in the input, to see if it's a ` ` character. More info on how
+            // we deal with this in *combinator.js*.
+            //
+            combinator: function () {
+                var match, c = input.charAt(i);
+
+                if (c === '>' || c === '+' || c === '~') {
+                    i++;
+                    while (input.charAt(i).match(/\s/)) { i++ }
+                    return new(tree.Combinator)(c);
+                } else if (input.charAt(i - 1).match(/\s/)) {
+                    return new(tree.Combinator)(" ");
+                } else {
+                    return new(tree.Combinator)(null);
+                }
+            },
+
+            //
+            // A CSS Selector
+            //
+            //     .class > div + h1
+            //     li a:hover
+            //
+            // Selectors are made out of one or more Elements, see above.
+            //
+            selector: function () {
+                var sel, e, elements = [], c, match;
+
+                // depreciated, will be removed soon
+                if ($('(')) {
+                    sel = $(this.entity);
+                    expect(')');
+                    return new(tree.Selector)([new(tree.Element)('', sel, i)]);
+                }
+
+                while (e = $(this.element)) {
+                    c = input.charAt(i);
+                    elements.push(e)
+                    if (c === '{' || c === '}' || c === ';' || c === ',') { break }
+                }
+
+                if (elements.length > 0) { return new(tree.Selector)(elements) }
+            },
+            tag: function () {
+                return $(/^[A-Za-z][A-Za-z-]*[0-9]?/) || $('*');
+            },
+            attribute: function () {
+                var attr = '', key, val, op;
+
+                if (! $('[')) return;
+
+                if (key = $(/^(?:[_A-Za-z0-9-]|\\.)+/) || $(this.entities.quoted)) {
+                    if ((op = $(/^[|~*$^]?=/)) &&
+                        (val = $(this.entities.quoted) || $(/^[\w-]+/))) {
+                        attr = [key, op, val.toCSS ? val.toCSS() : val].join('');
+                    } else { attr = key }
+                }
+
+                if (! $(']')) return;
+
+                if (attr) { return "[" + attr + "]" }
+            },
+
+            //
+            // The `block` rule is used by `ruleset` and `mixin.definition`.
+            // It's a wrapper around the `primary` rule, with added `{}`.
+            //
+            block: function () {
+                var content;
+                if ($('{') && (content = $(this.primary)) && $('}')) {
+                    return content;
+                }
+            },
+
+            //
+            // div, .class, body > p {...}
+            //
+            ruleset: function () {
+                var selectors = [], s, rules, match, debugInfo;
+                save();
+
+                if (env.dumpLineNumbers)
+                    debugInfo = getDebugInfo(i, input, env);
+
+                while (s = $(this.selector)) {
+                    selectors.push(s);
+                    $(this.comment);
+                    if (! $(',')) { break }
+                    $(this.comment);
+                }
+
+                if (selectors.length > 0 && (rules = $(this.block))) {
+                    var ruleset = new(tree.Ruleset)(selectors, rules, env.strictImports);
+                    if (env.dumpLineNumbers)
+                        ruleset.debugInfo = debugInfo;
+                    return ruleset;
+                } else {
+                    // Backtrack
+                    furthest = i;
+                    restore();
+                }
+            },
+            rule: function () {
+                var name, value, c = input.charAt(i), important, match;
+                save();
+
+                if (c === '.' || c === '#' || c === '&') { return }
+
+                if (name = $(this.variable) || $(this.property)) {
+                    if ((name.charAt(0) != '@') && (match = /^([^@+\/'"*`(;{}-]*);/.exec(chunks[j]))) {
+                        i += match[0].length - 1;
+                        value = new(tree.Anonymous)(match[1]);
+                    } else if (name === "font") {
+                        value = $(this.font);
+                    } else {
+                        value = $(this.value);
+                    }
+                    important = $(this.important);
+
+                    if (value && $(this.end)) {
+                        return new(tree.Rule)(name, value, important, memo);
+                    } else {
+                        furthest = i;
+                        restore();
+                    }
+                }
+            },
+
+            //
+            // An @import directive
+            //
+            //     @import "lib";
+            //
+            // Depending on our environemnt, importing is done differently:
+            // In the browser, it's an XHR request, in Node, it would be a
+            // file-system operation. The function used for importing is
+            // stored in `import`, which we pass to the Import constructor.
+            //
+            "import": function () {
+                var path, features, index = i;
+                
+                save();
+                
+                var dir = $(/^@import(?:-(once))?\s+/);
+
+                if (dir && (path = $(this.entities.quoted) || $(this.entities.url))) {
+                    features = $(this.mediaFeatures);
+                    if ($(';')) {
+                        return new(tree.Import)(path, imports, features, (dir[1] === 'once'), index);
+                    }
+                }
+                
+                restore();
+            },
+
+            mediaFeature: function () {
+                var e, p, nodes = [];
+
+                do {
+                    if (e = $(this.entities.keyword)) {
+                        nodes.push(e);
+                    } else if ($('(')) {
+                        p = $(this.property);
+                        e = $(this.entity);
+                        if ($(')')) {
+                            if (p && e) {
+                                nodes.push(new(tree.Paren)(new(tree.Rule)(p, e, null, i, true)));
+                            } else if (e) {
+                                nodes.push(new(tree.Paren)(e));
+                            } else {
+                                return null;
+                            }
+                        } else { return null }
+                    }
+                } while (e);
+
+                if (nodes.length > 0) {
+                    return new(tree.Expression)(nodes);
+                }
+            },
+
+            mediaFeatures: function () {
+                var e, features = [];
+
+                do {
+                  if (e = $(this.mediaFeature)) {
+                      features.push(e);
+                      if (! $(',')) { break }
+                  } else if (e = $(this.entities.variable)) {
+                      features.push(e);
+                      if (! $(',')) { break }
+                  }
+                } while (e);
+
+                return features.length > 0 ? features : null;
+            },
+
+            media: function () {
+                var features, rules, media, debugInfo;
+
+                if (env.dumpLineNumbers)
+                    debugInfo = getDebugInfo(i, input, env);
+
+                if ($(/^@media/)) {
+                    features = $(this.mediaFeatures);
+
+                    if (rules = $(this.block)) {
+                        media = new(tree.Media)(rules, features);
+                        if(env.dumpLineNumbers)
+                            media.debugInfo = debugInfo;
+                        return media;
+                    }
+                }
+            },
+
+            //
+            // A CSS Directive
+            //
+            //     @charset "utf-8";
+            //
+            directive: function () {
+                var name, value, rules, identifier, e, nodes, nonVendorSpecificName,
+                    hasBlock, hasIdentifier;
+
+                if (input.charAt(i) !== '@') return;
+
+                if (value = $(this['import']) || $(this.media)) {
+                    return value;
+                }
+                
+                save();
+
+                name = $(/^@[a-z-]+/);
+
+                nonVendorSpecificName = name;
+                if (name.charAt(1) == '-' && name.indexOf('-', 2) > 0) {
+                    nonVendorSpecificName = "@" + name.slice(name.indexOf('-', 2) + 1);
+                }
+
+                switch(nonVendorSpecificName) {
+                    case "@font-face":
+                        hasBlock = true;
+                        break;
+                    case "@viewport":
+                    case "@top-left":
+                    case "@top-left-corner":
+                    case "@top-center":
+                    case "@top-right":
+                    case "@top-right-corner":
+                    case "@bottom-left":
+                    case "@bottom-left-corner":
+                    case "@bottom-center":
+                    case "@bottom-right":
+                    case "@bottom-right-corner":
+                    case "@left-top":
+                    case "@left-middle":
+                    case "@left-bottom":
+                    case "@right-top":
+                    case "@right-middle":
+                    case "@right-bottom":
+                        hasBlock = true;
+                        break;
+                    case "@page":
+                    case "@document":
+                    case "@supports":
+                    case "@keyframes":
+                        hasBlock = true;
+                        hasIdentifier = true;
+                        break;
+                }
+
+                if (hasIdentifier) {
+                    name += " " + ($(/^[^{]+/) || '').trim();
+                }
+
+                if (hasBlock)
+                {
+                    if (rules = $(this.block)) {
+                        return new(tree.Directive)(name, rules);
+                    }
+                } else {
+                    if ((value = $(this.entity)) && $(';')) {
+                        return new(tree.Directive)(name, value);
+                    }
+                }
+                
+                restore();
+            },
+            font: function () {
+                var value = [], expression = [], weight, shorthand, font, e;
+
+                while (e = $(this.shorthand) || $(this.entity)) {
+                    expression.push(e);
+                }
+                value.push(new(tree.Expression)(expression));
+
+                if ($(',')) {
+                    while (e = $(this.expression)) {
+                        value.push(e);
+                        if (! $(',')) { break }
+                    }
+                }
+                return new(tree.Value)(value);
+            },
+
+            //
+            // A Value is a comma-delimited list of Expressions
+            //
+            //     font-family: Baskerville, Georgia, serif;
+            //
+            // In a Rule, a Value represents everything after the `:`,
+            // and before the `;`.
+            //
+            value: function () {
+                var e, expressions = [], important;
+
+                while (e = $(this.expression)) {
+                    expressions.push(e);
+                    if (! $(',')) { break }
+                }
+
+                if (expressions.length > 0) {
+                    return new(tree.Value)(expressions);
+                }
+            },
+            important: function () {
+                if (input.charAt(i) === '!') {
+                    return $(/^! *important/);
+                }
+            },
+            sub: function () {
+                var e;
+
+                if ($('(') && (e = $(this.expression)) && $(')')) {
+                    return e;
+                }
+            },
+            multiplication: function () {
+                var m, a, op, operation;
+                if (m = $(this.operand)) {
+                    while (!peek(/^\/\*/) && (op = ($('/') || $('*'))) && (a = $(this.operand))) {
+                        operation = new(tree.Operation)(op, [operation || m, a]);
+                    }
+                    return operation || m;
+                }
+            },
+            addition: function () {
+                var m, a, op, operation;
+                if (m = $(this.multiplication)) {
+                    while ((op = $(/^[-+]\s+/) || (!isWhitespace(input.charAt(i - 1)) && ($('+') || $('-')))) &&
+                           (a = $(this.multiplication))) {
+                        operation = new(tree.Operation)(op, [operation || m, a]);
+                    }
+                    return operation || m;
+                }
+            },
+            conditions: function () {
+                var a, b, index = i, condition;
+
+                if (a = $(this.condition)) {
+                    while ($(',') && (b = $(this.condition))) {
+                        condition = new(tree.Condition)('or', condition || a, b, index);
+                    }
+                    return condition || a;
+                }
+            },
+            condition: function () {
+                var a, b, c, op, index = i, negate = false;
+
+                if ($(/^not/)) { negate = true }
+                expect('(');
+                if (a = $(this.addition) || $(this.entities.keyword) || $(this.entities.quoted)) {
+                    if (op = $(/^(?:>=|=<|[<=>])/)) {
+                        if (b = $(this.addition) || $(this.entities.keyword) || $(this.entities.quoted)) {
+                            c = new(tree.Condition)(op, a, b, index, negate);
+                        } else {
+                            error('expected expression');
+                        }
+                    } else {
+                        c = new(tree.Condition)('=', a, new(tree.Keyword)('true'), index, negate);
+                    }
+                    expect(')');
+                    return $(/^and/) ? new(tree.Condition)('and', c, $(this.condition)) : c;
+                }
+            },
+
+            //
+            // An operand is anything that can be part of an operation,
+            // such as a Color, or a Variable
+            //
+            operand: function () {
+                var negate, p = input.charAt(i + 1);
+
+                if (input.charAt(i) === '-' && (p === '@' || p === '(')) { negate = $('-') }
+                var o = $(this.sub) || $(this.entities.dimension) ||
+                        $(this.entities.color) || $(this.entities.variable) ||
+                        $(this.entities.call);
+                return negate ? new(tree.Operation)('*', [new(tree.Dimension)(-1), o])
+                              : o;
+            },
+
+            //
+            // Expressions either represent mathematical operations,
+            // or white-space delimited Entities.
+            //
+            //     1px solid black
+            //     @var * 2
+            //
+            expression: function () {
+                var e, delim, entities = [], d;
+
+                while (e = $(this.addition) || $(this.entity)) {
+                    entities.push(e);
+                }
+                if (entities.length > 0) {
+                    return new(tree.Expression)(entities);
+                }
+            },
+            property: function () {
+                var name;
+
+                if (name = $(/^(\*?-?[_a-z0-9-]+)\s*:/)) {
+                    return name[1];
+                }
+            }
+        }
+    };
+};
+
+if (less.mode === 'browser' || less.mode === 'rhino') {
+    //
+    // Used by `@import` directives
+    //
+    less.Parser.importer = function (path, paths, callback, env) {
+        if (!/^([a-z-]+:)?\//.test(path) && paths.length > 0) {
+            path = paths[0] + path;
+        }
+        // We pass `true` as 3rd argument, to force the reload of the import.
+        // This is so we can get the syntax tree as opposed to just the CSS output,
+        // as we need this to evaluate the current stylesheet.
+        // __ Now using the hack of passing a ref to top parser's content cache in the 1st arg. __
+        loadStyleSheet({ href: path, title: path, type: env.mime, contents: env.contents }, function (e) {
+            if (e && typeof(env.errback) === "function") {
+                env.errback.call(null, path, paths, callback, env);
+            } else {
+                callback.apply(null, arguments);
+            }
+        }, true);
+    };
+}
+
+(function (tree) {
+
+tree.functions = {
+    rgb: function (r, g, b) {
+        return this.rgba(r, g, b, 1.0);
+    },
+    rgba: function (r, g, b, a) {
+        var rgb = [r, g, b].map(function (c) { return number(c) }),
+            a = number(a);
+        return new(tree.Color)(rgb, a);
+    },
+    hsl: function (h, s, l) {
+        return this.hsla(h, s, l, 1.0);
+    },
+    hsla: function (h, s, l, a) {
+        h = (number(h) % 360) / 360;
+        s = number(s); l = number(l); a = number(a);
+
+        var m2 = l <= 0.5 ? l * (s + 1) : l + s - l * s;
+        var m1 = l * 2 - m2;
+
+        return this.rgba(hue(h + 1/3) * 255,
+                         hue(h)       * 255,
+                         hue(h - 1/3) * 255,
+                         a);
+
+        function hue(h) {
+            h = h < 0 ? h + 1 : (h > 1 ? h - 1 : h);
+            if      (h * 6 < 1) return m1 + (m2 - m1) * h * 6;
+            else if (h * 2 < 1) return m2;
+            else if (h * 3 < 2) return m1 + (m2 - m1) * (2/3 - h) * 6;
+            else                return m1;
+        }
+    },
+    hue: function (color) {
+        return new(tree.Dimension)(Math.round(color.toHSL().h));
+    },
+    saturation: function (color) {
+        return new(tree.Dimension)(Math.round(color.toHSL().s * 100), '%');
+    },
+    lightness: function (color) {
+        return new(tree.Dimension)(Math.round(color.toHSL().l * 100), '%');
+    },
+    red: function (color) {
+        return new(tree.Dimension)(color.rgb[0]);
+    },
+    green: function (color) {
+        return new(tree.Dimension)(color.rgb[1]);
+    },
+    blue: function (color) {
+        return new(tree.Dimension)(color.rgb[2]);
+    },
+    alpha: function (color) {
+        return new(tree.Dimension)(color.toHSL().a);
+    },
+    luma: function (color) {
+        return new(tree.Dimension)(Math.round((0.2126 * (color.rgb[0]/255) +
+            0.7152 * (color.rgb[1]/255) +
+            0.0722 * (color.rgb[2]/255))
+            * color.alpha * 100), '%');
+    },
+    saturate: function (color, amount) {
+        var hsl = color.toHSL();
+
+        hsl.s += amount.value / 100;
+        hsl.s = clamp(hsl.s);
+        return hsla(hsl);
+    },
+    desaturate: function (color, amount) {
+        var hsl = color.toHSL();
+
+        hsl.s -= amount.value / 100;
+        hsl.s = clamp(hsl.s);
+        return hsla(hsl);
+    },
+    lighten: function (color, amount) {
+        var hsl = color.toHSL();
+
+        hsl.l += amount.value / 100;
+        hsl.l = clamp(hsl.l);
+        return hsla(hsl);
+    },
+    darken: function (color, amount) {
+        var hsl = color.toHSL();
+
+        hsl.l -= amount.value / 100;
+        hsl.l = clamp(hsl.l);
+        return hsla(hsl);
+    },
+    fadein: function (color, amount) {
+        var hsl = color.toHSL();
+
+        hsl.a += amount.value / 100;
+        hsl.a = clamp(hsl.a);
+        return hsla(hsl);
+    },
+    fadeout: function (color, amount) {
+        var hsl = color.toHSL();
+
+        hsl.a -= amount.value / 100;
+        hsl.a = clamp(hsl.a);
+        return hsla(hsl);
+    },
+    fade: function (color, amount) {
+        var hsl = color.toHSL();
+
+        hsl.a = amount.value / 100;
+        hsl.a = clamp(hsl.a);
+        return hsla(hsl);
+    },
+    spin: function (color, amount) {
+        var hsl = color.toHSL();
+        var hue = (hsl.h + amount.value) % 360;
+
+        hsl.h = hue < 0 ? 360 + hue : hue;
+
+        return hsla(hsl);
+    },
+    //
+    // Copyright (c) 2006-2009 Hampton Catlin, Nathan Weizenbaum, and Chris Eppstein
+    // http://sass-lang.com
+    //
+    mix: function (color1, color2, weight) {
+        if (!weight) {
+            weight = new(tree.Dimension)(50);
+        }
+        var p = weight.value / 100.0;
+        var w = p * 2 - 1;
+        var a = color1.toHSL().a - color2.toHSL().a;
+
+        var w1 = (((w * a == -1) ? w : (w + a) / (1 + w * a)) + 1) / 2.0;
+        var w2 = 1 - w1;
+
+        var rgb = [color1.rgb[0] * w1 + color2.rgb[0] * w2,
+                   color1.rgb[1] * w1 + color2.rgb[1] * w2,
+                   color1.rgb[2] * w1 + color2.rgb[2] * w2];
+
+        var alpha = color1.alpha * p + color2.alpha * (1 - p);
+
+        return new(tree.Color)(rgb, alpha);
+    },
+    greyscale: function (color) {
+        return this.desaturate(color, new(tree.Dimension)(100));
+    },
+    contrast: function (color, dark, light, threshold) {
+        if (typeof light === 'undefined') {
+            light = this.rgba(255, 255, 255, 1.0);
+        }
+        if (typeof dark === 'undefined') {
+            dark = this.rgba(0, 0, 0, 1.0);
+        }
+        if (typeof threshold === 'undefined') {
+            threshold = 0.43;
+        } else {
+            threshold = threshold.value;
+        }
+        if (((0.2126 * (color.rgb[0]/255) + 0.7152 * (color.rgb[1]/255) + 0.0722 * (color.rgb[2]/255)) * color.alpha) < threshold) {
+            return light;
+        } else {
+            return dark;
+        }
+    },
+    e: function (str) {
+        return new(tree.Anonymous)(str instanceof tree.JavaScript ? str.evaluated : str);
+    },
+    escape: function (str) {
+        return new(tree.Anonymous)(encodeURI(str.value).replace(/=/g, "%3D").replace(/:/g, "%3A").replace(/#/g, "%23").replace(/;/g, "%3B").replace(/\(/g, "%28").replace(/\)/g, "%29"));
+    },
+    '%': function (quoted /* arg, arg, ...*/) {
+        var args = Array.prototype.slice.call(arguments, 1),
+            str = quoted.value;
+
+        for (var i = 0; i < args.length; i++) {
+            str = str.replace(/%[sda]/i, function(token) {
+                var value = token.match(/s/i) ? args[i].value : args[i].toCSS();
+                return token.match(/[A-Z]$/) ? encodeURIComponent(value) : value;
+            });
+        }
+        str = str.replace(/%%/g, '%');
+        return new(tree.Quoted)('"' + str + '"', str);
+    },
+    round: function (n, f) {
+        var fraction = typeof(f) === "undefined" ? 0 : f.value;
+        if (n instanceof tree.Dimension) {
+            return new(tree.Dimension)(number(n).toFixed(fraction), n.unit);
+        } else if (typeof(n) === 'number') {
+            return n.toFixed(fraction);
+        } else {
+            throw { type: "Argument", message: "argument must be a number" };
+        }
+    },
+    ceil: function (n) {
+        return this._math('ceil', n);
+    },
+    floor: function (n) {
+        return this._math('floor', n);
+    },
+    _math: function (fn, n) {
+        if (n instanceof tree.Dimension) {
+            return new(tree.Dimension)(Math[fn](number(n)), n.unit);
+        } else if (typeof(n) === 'number') {
+            return Math[fn](n);
+        } else {
+            throw { type: "Argument", message: "argument must be a number" };
+        }
+    },
+    argb: function (color) {
+        return new(tree.Anonymous)(color.toARGB());
+
+    },
+    percentage: function (n) {
+        return new(tree.Dimension)(n.value * 100, '%');
+    },
+    color: function (n) {
+        if (n instanceof tree.Quoted) {
+            return new(tree.Color)(n.value.slice(1));
+        } else {
+            throw { type: "Argument", message: "argument must be a string" };
+        }
+    },
+    iscolor: function (n) {
+        return this._isa(n, tree.Color);
+    },
+    isnumber: function (n) {
+        return this._isa(n, tree.Dimension);
+    },
+    isstring: function (n) {
+        return this._isa(n, tree.Quoted);
+    },
+    iskeyword: function (n) {
+        return this._isa(n, tree.Keyword);
+    },
+    isurl: function (n) {
+        return this._isa(n, tree.URL);
+    },
+    ispixel: function (n) {
+        return (n instanceof tree.Dimension) && n.unit === 'px' ? tree.True : tree.False;
+    },
+    ispercentage: function (n) {
+        return (n instanceof tree.Dimension) && n.unit === '%' ? tree.True : tree.False;
+    },
+    isem: function (n) {
+        return (n instanceof tree.Dimension) && n.unit === 'em' ? tree.True : tree.False;
+    },
+    _isa: function (n, Type) {
+        return (n instanceof Type) ? tree.True : tree.False;
+    },
+    
+    /* Blending modes */
+    
+    multiply: function(color1, color2) {
+        var r = color1.rgb[0] * color2.rgb[0] / 255;
+        var g = color1.rgb[1] * color2.rgb[1] / 255;
+        var b = color1.rgb[2] * color2.rgb[2] / 255;
+        return this.rgb(r, g, b);
+    },
+    screen: function(color1, color2) {
+        var r = 255 - (255 - color1.rgb[0]) * (255 - color2.rgb[0]) / 255;
+        var g = 255 - (255 - color1.rgb[1]) * (255 - color2.rgb[1]) / 255;
+        var b = 255 - (255 - color1.rgb[2]) * (255 - color2.rgb[2]) / 255;
+        return this.rgb(r, g, b);
+    },
+    overlay: function(color1, color2) {
+        var r = color1.rgb[0] < 128 ? 2 * color1.rgb[0] * color2.rgb[0] / 255 : 255 - 2 * (255 - color1.rgb[0]) * (255 - color2.rgb[0]) / 255;
+        var g = color1.rgb[1] < 128 ? 2 * color1.rgb[1] * color2.rgb[1] / 255 : 255 - 2 * (255 - color1.rgb[1]) * (255 - color2.rgb[1]) / 255;
+        var b = color1.rgb[2] < 128 ? 2 * color1.rgb[2] * color2.rgb[2] / 255 : 255 - 2 * (255 - color1.rgb[2]) * (255 - color2.rgb[2]) / 255;
+        return this.rgb(r, g, b);
+    },
+    softlight: function(color1, color2) {
+        var t = color2.rgb[0] * color1.rgb[0] / 255;
+        var r = t + color1.rgb[0] * (255 - (255 - color1.rgb[0]) * (255 - color2.rgb[0]) / 255 - t) / 255;
+        t = color2.rgb[1] * color1.rgb[1] / 255;
+        var g = t + color1.rgb[1] * (255 - (255 - color1.rgb[1]) * (255 - color2.rgb[1]) / 255 - t) / 255;
+        t = color2.rgb[2] * color1.rgb[2] / 255;
+        var b = t + color1.rgb[2] * (255 - (255 - color1.rgb[2]) * (255 - color2.rgb[2]) / 255 - t) / 255;
+        return this.rgb(r, g, b);
+    },
+    hardlight: function(color1, color2) {
+        var r = color2.rgb[0] < 128 ? 2 * color2.rgb[0] * color1.rgb[0] / 255 : 255 - 2 * (255 - color2.rgb[0]) * (255 - color1.rgb[0]) / 255;
+        var g = color2.rgb[1] < 128 ? 2 * color2.rgb[1] * color1.rgb[1] / 255 : 255 - 2 * (255 - color2.rgb[1]) * (255 - color1.rgb[1]) / 255;
+        var b = color2.rgb[2] < 128 ? 2 * color2.rgb[2] * color1.rgb[2] / 255 : 255 - 2 * (255 - color2.rgb[2]) * (255 - color1.rgb[2]) / 255;
+        return this.rgb(r, g, b);
+    },
+    difference: function(color1, color2) {
+        var r = Math.abs(color1.rgb[0] - color2.rgb[0]);
+        var g = Math.abs(color1.rgb[1] - color2.rgb[1]);
+        var b = Math.abs(color1.rgb[2] - color2.rgb[2]);
+        return this.rgb(r, g, b);
+    },
+    exclusion: function(color1, color2) {
+        var r = color1.rgb[0] + color2.rgb[0] * (255 - color1.rgb[0] - color1.rgb[0]) / 255;
+        var g = color1.rgb[1] + color2.rgb[1] * (255 - color1.rgb[1] - color1.rgb[1]) / 255;
+        var b = color1.rgb[2] + color2.rgb[2] * (255 - color1.rgb[2] - color1.rgb[2]) / 255;
+        return this.rgb(r, g, b);
+    },
+    average: function(color1, color2) {
+        var r = (color1.rgb[0] + color2.rgb[0]) / 2;
+        var g = (color1.rgb[1] + color2.rgb[1]) / 2;
+        var b = (color1.rgb[2] + color2.rgb[2]) / 2;
+        return this.rgb(r, g, b);
+    },
+    negation: function(color1, color2) {
+        var r = 255 - Math.abs(255 - color2.rgb[0] - color1.rgb[0]);
+        var g = 255 - Math.abs(255 - color2.rgb[1] - color1.rgb[1]);
+        var b = 255 - Math.abs(255 - color2.rgb[2] - color1.rgb[2]);
+        return this.rgb(r, g, b);
+    },
+    tint: function(color, amount) {
+        return this.mix(this.rgb(255,255,255), color, amount);
+    },
+    shade: function(color, amount) {
+        return this.mix(this.rgb(0, 0, 0), color, amount);
+    }
+};
+
+function hsla(hsla) {
+    return tree.functions.hsla(hsla.h, hsla.s, hsla.l, hsla.a);
+}
+
+function number(n) {
+    if (n instanceof tree.Dimension) {
+        return parseFloat(n.unit == '%' ? n.value / 100 : n.value);
+    } else if (typeof(n) === 'number') {
+        return n;
+    } else {
+        throw {
+            error: "RuntimeError",
+            message: "color functions take numbers as parameters"
+        };
+    }
+}
+
+function clamp(val) {
+    return Math.min(1, Math.max(0, val));
+}
+
+})(require('./tree'));
+(function (tree) {
+    tree.colors = {
+        'aliceblue':'#f0f8ff',
+        'antiquewhite':'#faebd7',
+        'aqua':'#00ffff',
+        'aquamarine':'#7fffd4',
+        'azure':'#f0ffff',
+        'beige':'#f5f5dc',
+        'bisque':'#ffe4c4',
+        'black':'#000000',
+        'blanchedalmond':'#ffebcd',
+        'blue':'#0000ff',
+        'blueviolet':'#8a2be2',
+        'brown':'#a52a2a',
+        'burlywood':'#deb887',
+        'cadetblue':'#5f9ea0',
+        'chartreuse':'#7fff00',
+        'chocolate':'#d2691e',
+        'coral':'#ff7f50',
+        'cornflowerblue':'#6495ed',
+        'cornsilk':'#fff8dc',
+        'crimson':'#dc143c',
+        'cyan':'#00ffff',
+        'darkblue':'#00008b',
+        'darkcyan':'#008b8b',
+        'darkgoldenrod':'#b8860b',
+        'darkgray':'#a9a9a9',
+        'darkgrey':'#a9a9a9',
+        'darkgreen':'#006400',
+        'darkkhaki':'#bdb76b',
+        'darkmagenta':'#8b008b',
+        'darkolivegreen':'#556b2f',
+        'darkorange':'#ff8c00',
+        'darkorchid':'#9932cc',
+        'darkred':'#8b0000',
+        'darksalmon':'#e9967a',
+        'darkseagreen':'#8fbc8f',
+        'darkslateblue':'#483d8b',
+        'darkslategray':'#2f4f4f',
+        'darkslategrey':'#2f4f4f',
+        'darkturquoise':'#00ced1',
+        'darkviolet':'#9400d3',
+        'deeppink':'#ff1493',
+        'deepskyblue':'#00bfff',
+        'dimgray':'#696969',
+        'dimgrey':'#696969',
+        'dodgerblue':'#1e90ff',
+        'firebrick':'#b22222',
+        'floralwhite':'#fffaf0',
+        'forestgreen':'#228b22',
+        'fuchsia':'#ff00ff',
+        'gainsboro':'#dcdcdc',
+        'ghostwhite':'#f8f8ff',
+        'gold':'#ffd700',
+        'goldenrod':'#daa520',
+        'gray':'#808080',
+        'grey':'#808080',
+        'green':'#008000',
+        'greenyellow':'#adff2f',
+        'honeydew':'#f0fff0',
+        'hotpink':'#ff69b4',
+        'indianred':'#cd5c5c',
+        'indigo':'#4b0082',
+        'ivory':'#fffff0',
+        'khaki':'#f0e68c',
+        'lavender':'#e6e6fa',
+        'lavenderblush':'#fff0f5',
+        'lawngreen':'#7cfc00',
+        'lemonchiffon':'#fffacd',
+        'lightblue':'#add8e6',
+        'lightcoral':'#f08080',
+        'lightcyan':'#e0ffff',
+        'lightgoldenrodyellow':'#fafad2',
+        'lightgray':'#d3d3d3',
+        'lightgrey':'#d3d3d3',
+        'lightgreen':'#90ee90',
+        'lightpink':'#ffb6c1',
+        'lightsalmon':'#ffa07a',
+        'lightseagreen':'#20b2aa',
+        'lightskyblue':'#87cefa',
+        'lightslategray':'#778899',
+        'lightslategrey':'#778899',
+        'lightsteelblue':'#b0c4de',
+        'lightyellow':'#ffffe0',
+        'lime':'#00ff00',
+        'limegreen':'#32cd32',
+        'linen':'#faf0e6',
+        'magenta':'#ff00ff',
+        'maroon':'#800000',
+        'mediumaquamarine':'#66cdaa',
+        'mediumblue':'#0000cd',
+        'mediumorchid':'#ba55d3',
+        'mediumpurple':'#9370d8',
+        'mediumseagreen':'#3cb371',
+        'mediumslateblue':'#7b68ee',
+        'mediumspringgreen':'#00fa9a',
+        'mediumturquoise':'#48d1cc',
+        'mediumvioletred':'#c71585',
+        'midnightblue':'#191970',
+        'mintcream':'#f5fffa',
+        'mistyrose':'#ffe4e1',
+        'moccasin':'#ffe4b5',
+        'navajowhite':'#ffdead',
+        'navy':'#000080',
+        'oldlace':'#fdf5e6',
+        'olive':'#808000',
+        'olivedrab':'#6b8e23',
+        'orange':'#ffa500',
+        'orangered':'#ff4500',
+        'orchid':'#da70d6',
+        'palegoldenrod':'#eee8aa',
+        'palegreen':'#98fb98',
+        'paleturquoise':'#afeeee',
+        'palevioletred':'#d87093',
+        'papayawhip':'#ffefd5',
+        'peachpuff':'#ffdab9',
+        'peru':'#cd853f',
+        'pink':'#ffc0cb',
+        'plum':'#dda0dd',
+        'powderblue':'#b0e0e6',
+        'purple':'#800080',
+        'red':'#ff0000',
+        'rosybrown':'#bc8f8f',
+        'royalblue':'#4169e1',
+        'saddlebrown':'#8b4513',
+        'salmon':'#fa8072',
+        'sandybrown':'#f4a460',
+        'seagreen':'#2e8b57',
+        'seashell':'#fff5ee',
+        'sienna':'#a0522d',
+        'silver':'#c0c0c0',
+        'skyblue':'#87ceeb',
+        'slateblue':'#6a5acd',
+        'slategray':'#708090',
+        'slategrey':'#708090',
+        'snow':'#fffafa',
+        'springgreen':'#00ff7f',
+        'steelblue':'#4682b4',
+        'tan':'#d2b48c',
+        'teal':'#008080',
+        'thistle':'#d8bfd8',
+        'tomato':'#ff6347',
+        // 'transparent':'rgba(0,0,0,0)',
+        'turquoise':'#40e0d0',
+        'violet':'#ee82ee',
+        'wheat':'#f5deb3',
+        'white':'#ffffff',
+        'whitesmoke':'#f5f5f5',
+        'yellow':'#ffff00',
+        'yellowgreen':'#9acd32'
+    };
+})(require('./tree'));
+(function (tree) {
+
+tree.Alpha = function (val) {
+    this.value = val;
+};
+tree.Alpha.prototype = {
+    toCSS: function () {
+        return "alpha(opacity=" +
+               (this.value.toCSS ? this.value.toCSS() : this.value) + ")";
+    },
+    eval: function (env) {
+        if (this.value.eval) { this.value = this.value.eval(env) }
+        return this;
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Anonymous = function (string) {
+    this.value = string.value || string;
+};
+tree.Anonymous.prototype = {
+    toCSS: function () {
+        return this.value;
+    },
+    eval: function () { return this },
+    compare: function (x) {
+        if (!x.toCSS) {
+            return -1;
+        }
+        
+        var left = this.toCSS(),
+            right = x.toCSS();
+        
+        if (left === right) {
+            return 0;
+        }
+        
+        return left < right ? -1 : 1;
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Assignment = function (key, val) {
+    this.key = key;
+    this.value = val;
+};
+tree.Assignment.prototype = {
+    toCSS: function () {
+        return this.key + '=' + (this.value.toCSS ? this.value.toCSS() : this.value);
+    },
+    eval: function (env) {
+        if (this.value.eval) {
+            return new(tree.Assignment)(this.key, this.value.eval(env));
+        }
+        return this;
+    }
+};
+
+})(require('../tree'));(function (tree) {
+
+//
+// A function call node.
+//
+tree.Call = function (name, args, index, filename) {
+    this.name = name;
+    this.args = args;
+    this.index = index;
+    this.filename = filename;
+};
+tree.Call.prototype = {
+    //
+    // When evaluating a function call,
+    // we either find the function in `tree.functions` [1],
+    // in which case we call it, passing the  evaluated arguments,
+    // or we simply print it out as it appeared originally [2].
+    //
+    // The *functions.js* file contains the built-in functions.
+    //
+    // The reason why we evaluate the arguments, is in the case where
+    // we try to pass a variable to a function, like: `saturate(@color)`.
+    // The function should receive the value, not the variable.
+    //
+    eval: function (env) {
+        var args = this.args.map(function (a) { return a.eval(env) });
+
+        if (this.name in tree.functions) { // 1.
+            try {
+                return tree.functions[this.name].apply(tree.functions, args);
+            } catch (e) {
+                throw { type: e.type || "Runtime",
+                        message: "error evaluating function `" + this.name + "`" +
+                                 (e.message ? ': ' + e.message : ''),
+                        index: this.index, filename: this.filename };
+            }
+        } else { // 2.
+            return new(tree.Anonymous)(this.name +
+                   "(" + args.map(function (a) { return a.toCSS(env) }).join(', ') + ")");
+        }
+    },
+
+    toCSS: function (env) {
+        return this.eval(env).toCSS();
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+//
+// RGB Colors - #ff0014, #eee
+//
+tree.Color = function (rgb, a) {
+    //
+    // The end goal here, is to parse the arguments
+    // into an integer triplet, such as `128, 255, 0`
+    //
+    // This facilitates operations and conversions.
+    //
+    if (Array.isArray(rgb)) {
+        this.rgb = rgb;
+    } else if (rgb.length == 6) {
+        this.rgb = rgb.match(/.{2}/g).map(function (c) {
+            return parseInt(c, 16);
+        });
+    } else {
+        this.rgb = rgb.split('').map(function (c) {
+            return parseInt(c + c, 16);
+        });
+    }
+    this.alpha = typeof(a) === 'number' ? a : 1;
+};
+tree.Color.prototype = {
+    eval: function () { return this },
+
+    //
+    // If we have some transparency, the only way to represent it
+    // is via `rgba`. Otherwise, we use the hex representation,
+    // which has better compatibility with older browsers.
+    // Values are capped between `0` and `255`, rounded and zero-padded.
+    //
+    toCSS: function () {
+        if (this.alpha < 1.0) {
+            return "rgba(" + this.rgb.map(function (c) {
+                return Math.round(c);
+            }).concat(this.alpha).join(', ') + ")";
+        } else {
+            return '#' + this.rgb.map(function (i) {
+                i = Math.round(i);
+                i = (i > 255 ? 255 : (i < 0 ? 0 : i)).toString(16);
+                return i.length === 1 ? '0' + i : i;
+            }).join('');
+        }
+    },
+
+    //
+    // Operations have to be done per-channel, if not,
+    // channels will spill onto each other. Once we have
+    // our result, in the form of an integer triplet,
+    // we create a new Color node to hold the result.
+    //
+    operate: function (op, other) {
+        var result = [];
+
+        if (! (other instanceof tree.Color)) {
+            other = other.toColor();
+        }
+
+        for (var c = 0; c < 3; c++) {
+            result[c] = tree.operate(op, this.rgb[c], other.rgb[c]);
+        }
+        return new(tree.Color)(result, this.alpha + other.alpha);
+    },
+
+    toHSL: function () {
+        var r = this.rgb[0] / 255,
+            g = this.rgb[1] / 255,
+            b = this.rgb[2] / 255,
+            a = this.alpha;
+
+        var max = Math.max(r, g, b), min = Math.min(r, g, b);
+        var h, s, l = (max + min) / 2, d = max - min;
+
+        if (max === min) {
+            h = s = 0;
+        } else {
+            s = l > 0.5 ? d / (2 - max - min) : d / (max + min);
+
+            switch (max) {
+                case r: h = (g - b) / d + (g < b ? 6 : 0); break;
+                case g: h = (b - r) / d + 2;               break;
+                case b: h = (r - g) / d + 4;               break;
+            }
+            h /= 6;
+        }
+        return { h: h * 360, s: s, l: l, a: a };
+    },
+    toARGB: function () {
+        var argb = [Math.round(this.alpha * 255)].concat(this.rgb);
+        return '#' + argb.map(function (i) {
+            i = Math.round(i);
+            i = (i > 255 ? 255 : (i < 0 ? 0 : i)).toString(16);
+            return i.length === 1 ? '0' + i : i;
+        }).join('');
+    },
+    compare: function (x) {
+        if (!x.rgb) {
+            return -1;
+        }
+        
+        return (x.rgb[0] === this.rgb[0] &&
+            x.rgb[1] === this.rgb[1] &&
+            x.rgb[2] === this.rgb[2] &&
+            x.alpha === this.alpha) ? 0 : -1;
+    }
+};
+
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Comment = function (value, silent) {
+    this.value = value;
+    this.silent = !!silent;
+};
+tree.Comment.prototype = {
+    toCSS: function (env) {
+        return env.compress ? '' : this.value;
+    },
+    eval: function () { return this }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Condition = function (op, l, r, i, negate) {
+    this.op = op.trim();
+    this.lvalue = l;
+    this.rvalue = r;
+    this.index = i;
+    this.negate = negate;
+};
+tree.Condition.prototype.eval = function (env) {
+    var a = this.lvalue.eval(env),
+        b = this.rvalue.eval(env);
+
+    var i = this.index, result;
+
+    var result = (function (op) {
+        switch (op) {
+            case 'and':
+                return a && b;
+            case 'or':
+                return a || b;
+            default:
+                if (a.compare) {
+                    result = a.compare(b);
+                } else if (b.compare) {
+                    result = b.compare(a);
+                } else {
+                    throw { type: "Type",
+                            message: "Unable to perform comparison",
+                            index: i };
+                }
+                switch (result) {
+                    case -1: return op === '<' || op === '=<';
+                    case  0: return op === '=' || op === '>=' || op === '=<';
+                    case  1: return op === '>' || op === '>=';
+                }
+        }
+    })(this.op);
+    return this.negate ? !result : result;
+};
+
+})(require('../tree'));
+(function (tree) {
+
+//
+// A number with a unit
+//
+tree.Dimension = function (value, unit) {
+    this.value = parseFloat(value);
+    this.unit = unit || null;
+};
+
+tree.Dimension.prototype = {
+    eval: function () { return this },
+    toColor: function () {
+        return new(tree.Color)([this.value, this.value, this.value]);
+    },
+    toCSS: function () {
+        var css = this.value + this.unit;
+        return css;
+    },
+
+    // In an operation between two Dimensions,
+    // we default to the first Dimension's unit,
+    // so `1px + 2em` will yield `3px`.
+    // In the future, we could implement some unit
+    // conversions such that `100cm + 10mm` would yield
+    // `101cm`.
+    operate: function (op, other) {
+        return new(tree.Dimension)
+                  (tree.operate(op, this.value, other.value),
+                  this.unit || other.unit);
+    },
+
+    // TODO: Perform unit conversion before comparing
+    compare: function (other) {
+        if (other instanceof tree.Dimension) {
+            if (other.value > this.value) {
+                return -1;
+            } else if (other.value < this.value) {
+                return 1;
+            } else {
+                return 0;
+            }
+        } else {
+            return -1;
+        }
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Directive = function (name, value) {
+    this.name = name;
+
+    if (Array.isArray(value)) {
+        this.ruleset = new(tree.Ruleset)([], value);
+        this.ruleset.allowImports = true;
+    } else {
+        this.value = value;
+    }
+};
+tree.Directive.prototype = {
+    toCSS: function (ctx, env) {
+        if (this.ruleset) {
+            this.ruleset.root = true;
+            return this.name + (env.compress ? '{' : ' {\n  ') +
+                   this.ruleset.toCSS(ctx, env).trim().replace(/\n/g, '\n  ') +
+                               (env.compress ? '}': '\n}\n');
+        } else {
+            return this.name + ' ' + this.value.toCSS() + ';\n';
+        }
+    },
+    eval: function (env) {
+        var evaldDirective = this;
+        if (this.ruleset) {
+            env.frames.unshift(this);
+            evaldDirective = new(tree.Directive)(this.name);
+            evaldDirective.ruleset = this.ruleset.eval(env);
+            env.frames.shift();
+        }
+        return evaldDirective;
+    },
+    variable: function (name) { return tree.Ruleset.prototype.variable.call(this.ruleset, name) },
+    find: function () { return tree.Ruleset.prototype.find.apply(this.ruleset, arguments) },
+    rulesets: function () { return tree.Ruleset.prototype.rulesets.apply(this.ruleset) }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Element = function (combinator, value, index) {
+    this.combinator = combinator instanceof tree.Combinator ?
+                      combinator : new(tree.Combinator)(combinator);
+
+    if (typeof(value) === 'string') {
+        this.value = value.trim();
+    } else if (value) {
+        this.value = value;
+    } else {
+        this.value = "";
+    }
+    this.index = index;
+};
+tree.Element.prototype.eval = function (env) {
+    return new(tree.Element)(this.combinator,
+                             this.value.eval ? this.value.eval(env) : this.value,
+                             this.index);
+};
+tree.Element.prototype.toCSS = function (env) {
+	var value = (this.value.toCSS ? this.value.toCSS(env) : this.value);
+	if (value == '' && this.combinator.value.charAt(0) == '&') {
+		return '';
+	} else {
+		return this.combinator.toCSS(env || {}) + value;
+	}
+};
+
+tree.Combinator = function (value) {
+    if (value === ' ') {
+        this.value = ' ';
+    } else {
+        this.value = value ? value.trim() : "";
+    }
+};
+tree.Combinator.prototype.toCSS = function (env) {
+    return {
+        ''  : '',
+        ' ' : ' ',
+        ':' : ' :',
+        '+' : env.compress ? '+' : ' + ',
+        '~' : env.compress ? '~' : ' ~ ',
+        '>' : env.compress ? '>' : ' > '
+    }[this.value];
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Expression = function (value) { this.value = value };
+tree.Expression.prototype = {
+    eval: function (env) {
+        if (this.value.length > 1) {
+            return new(tree.Expression)(this.value.map(function (e) {
+                return e.eval(env);
+            }));
+        } else if (this.value.length === 1) {
+            return this.value[0].eval(env);
+        } else {
+            return this;
+        }
+    },
+    toCSS: function (env) {
+        return this.value.map(function (e) {
+            return e.toCSS ? e.toCSS(env) : '';
+        }).join(' ');
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+//
+// CSS @import node
+//
+// The general strategy here is that we don't want to wait
+// for the parsing to be completed, before we start importing
+// the file. That's because in the context of a browser,
+// most of the time will be spent waiting for the server to respond.
+//
+// On creation, we push the import path to our import queue, though
+// `import,push`, we also pass it a callback, which it'll call once
+// the file has been fetched, and parsed.
+//
+tree.Import = function (path, imports, features, once, index) {
+    var that = this;
+
+    this.once = once;
+    this.index = index;
+    this._path = path;
+    this.features = features && new(tree.Value)(features);
+
+    // The '.less' extension is optional
+    if (path instanceof tree.Quoted) {
+        this.path = /\.(le?|c)ss(\?.*)?$/.test(path.value) ? path.value : path.value + '.less';
+    } else {
+        this.path = path.value.value || path.value;
+    }
+
+    this.css = /css(\?.*)?$/.test(this.path);
+
+    // Only pre-compile .less files
+    if (! this.css) {
+        imports.push(this.path, function (e, root, imported) {
+            if (e) { e.index = index }
+            if (imported && that.once) that.skip = imported;
+            that.root = root || new(tree.Ruleset)([], []);
+        });
+    }
+};
+
+//
+// The actual import node doesn't return anything, when converted to CSS.
+// The reason is that it's used at the evaluation stage, so that the rules
+// it imports can be treated like any other rules.
+//
+// In `eval`, we make sure all Import nodes get evaluated, recursively, so
+// we end up with a flat structure, which can easily be imported in the parent
+// ruleset.
+//
+tree.Import.prototype = {
+    toCSS: function (env) {
+        var features = this.features ? ' ' + this.features.toCSS(env) : '';
+
+        if (this.css) {
+            return "@import " + this._path.toCSS() + features + ';\n';
+        } else {
+            return "";
+        }
+    },
+    eval: function (env) {
+        var ruleset, features = this.features && this.features.eval(env);
+
+        if (this.skip) return [];
+
+        if (this.css) {
+            return this;
+        } else {
+            ruleset = new(tree.Ruleset)([], this.root.rules.slice(0));
+
+            for (var i = 0; i < ruleset.rules.length; i++) {
+                if (ruleset.rules[i] instanceof tree.Import) {
+                    Array.prototype
+                         .splice
+                         .apply(ruleset.rules,
+                                [i, 1].concat(ruleset.rules[i].eval(env)));
+                }
+            }
+            return this.features ? new(tree.Media)(ruleset.rules, this.features.value) : ruleset.rules;
+        }
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.JavaScript = function (string, index, escaped) {
+    this.escaped = escaped;
+    this.expression = string;
+    this.index = index;
+};
+tree.JavaScript.prototype = {
+    eval: function (env) {
+        var result,
+            that = this,
+            context = {};
+
+        var expression = this.expression.replace(/@\{([\w-]+)\}/g, function (_, name) {
+            return tree.jsify(new(tree.Variable)('@' + name, that.index).eval(env));
+        });
+
+        try {
+            expression = new(Function)('return (' + expression + ')');
+        } catch (e) {
+            throw { message: "JavaScript evaluation error: `" + expression + "`" ,
+                    index: this.index };
+        }
+
+        for (var k in env.frames[0].variables()) {
+            context[k.slice(1)] = {
+                value: env.frames[0].variables()[k].value,
+                toJS: function () {
+                    return this.value.eval(env).toCSS();
+                }
+            };
+        }
+
+        try {
+            result = expression.call(context);
+        } catch (e) {
+            throw { message: "JavaScript evaluation error: '" + e.name + ': ' + e.message + "'" ,
+                    index: this.index };
+        }
+        if (typeof(result) === 'string') {
+            return new(tree.Quoted)('"' + result + '"', result, this.escaped, this.index);
+        } else if (Array.isArray(result)) {
+            return new(tree.Anonymous)(result.join(', '));
+        } else {
+            return new(tree.Anonymous)(result);
+        }
+    }
+};
+
+})(require('../tree'));
+
+(function (tree) {
+
+tree.Keyword = function (value) { this.value = value };
+tree.Keyword.prototype = {
+    eval: function () { return this },
+    toCSS: function () { return this.value },
+    compare: function (other) {
+        if (other instanceof tree.Keyword) {
+            return other.value === this.value ? 0 : 1;
+        } else {
+            return -1;
+        }
+    }
+};
+
+tree.True = new(tree.Keyword)('true');
+tree.False = new(tree.Keyword)('false');
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Media = function (value, features) {
+    var selectors = this.emptySelectors();
+
+    this.features = new(tree.Value)(features);
+    this.ruleset = new(tree.Ruleset)(selectors, value);
+    this.ruleset.allowImports = true;
+};
+tree.Media.prototype = {
+    toCSS: function (ctx, env) {
+        var features = this.features.toCSS(env);
+
+        this.ruleset.root = (ctx.length === 0 || ctx[0].multiMedia);
+        return '@media ' + features + (env.compress ? '{' : ' {\n  ') +
+               this.ruleset.toCSS(ctx, env).trim().replace(/\n/g, '\n  ') +
+                           (env.compress ? '}': '\n}\n');
+    },
+    eval: function (env) {
+        if (!env.mediaBlocks) {
+            env.mediaBlocks = [];
+            env.mediaPath = [];
+        }
+        
+        var blockIndex = env.mediaBlocks.length;
+        env.mediaPath.push(this);
+        env.mediaBlocks.push(this);
+
+        var media = new(tree.Media)([], []);
+        if(this.debugInfo) {
+            this.ruleset.debugInfo = this.debugInfo;
+            media.debugInfo = this.debugInfo;
+        }
+        media.features = this.features.eval(env);
+        
+        env.frames.unshift(this.ruleset);
+        media.ruleset = this.ruleset.eval(env);
+        env.frames.shift();
+        
+        env.mediaBlocks[blockIndex] = media;
+        env.mediaPath.pop();
+
+        return env.mediaPath.length === 0 ? media.evalTop(env) :
+                    media.evalNested(env)
+    },
+    variable: function (name) { return tree.Ruleset.prototype.variable.call(this.ruleset, name) },
+    find: function () { return tree.Ruleset.prototype.find.apply(this.ruleset, arguments) },
+    rulesets: function () { return tree.Ruleset.prototype.rulesets.apply(this.ruleset) },
+    emptySelectors: function() { 
+        var el = new(tree.Element)('', '&', 0);
+        return [new(tree.Selector)([el])];
+    },
+
+    evalTop: function (env) {
+        var result = this;
+
+        // Render all dependent Media blocks.
+        if (env.mediaBlocks.length > 1) {
+            var selectors = this.emptySelectors();
+            result = new(tree.Ruleset)(selectors, env.mediaBlocks);
+            result.multiMedia = true;
+        }
+
+        delete env.mediaBlocks;
+        delete env.mediaPath;
+
+        return result;
+    },
+    evalNested: function (env) {
+        var i, value,
+            path = env.mediaPath.concat([this]);
+
+        // Extract the media-query conditions separated with `,` (OR).
+        for (i = 0; i < path.length; i++) {
+            value = path[i].features instanceof tree.Value ?
+                        path[i].features.value : path[i].features;
+            path[i] = Array.isArray(value) ? value : [value];
+        }
+
+        // Trace all permutations to generate the resulting media-query.
+        //
+        // (a, b and c) with nested (d, e) ->
+        //    a and d
+        //    a and e
+        //    b and c and d
+        //    b and c and e
+        this.features = new(tree.Value)(this.permute(path).map(function (path) {
+            path = path.map(function (fragment) {
+                return fragment.toCSS ? fragment : new(tree.Anonymous)(fragment);
+            });
+
+            for(i = path.length - 1; i > 0; i--) {
+                path.splice(i, 0, new(tree.Anonymous)("and"));
+            }
+
+            return new(tree.Expression)(path);
+        }));
+
+        // Fake a tree-node that doesn't output anything.
+        return new(tree.Ruleset)([], []);
+    },
+    permute: function (arr) {
+      if (arr.length === 0) {
+          return [];
+      } else if (arr.length === 1) {
+          return arr[0];
+      } else {
+          var result = [];
+          var rest = this.permute(arr.slice(1));
+          for (var i = 0; i < rest.length; i++) {
+              for (var j = 0; j < arr[0].length; j++) {
+                  result.push([arr[0][j]].concat(rest[i]));
+              }
+          }
+          return result;
+      }
+    },
+    bubbleSelectors: function (selectors) {
+      this.ruleset = new(tree.Ruleset)(selectors.slice(0), [this.ruleset]);
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.mixin = {};
+tree.mixin.Call = function (elements, args, index, filename, important) {
+    this.selector = new(tree.Selector)(elements);
+    this.arguments = args;
+    this.index = index;
+    this.filename = filename;
+    this.important = important;
+};
+tree.mixin.Call.prototype = {
+    eval: function (env) {
+        var mixins, args, rules = [], match = false;
+
+        for (var i = 0; i < env.frames.length; i++) {
+            if ((mixins = env.frames[i].find(this.selector)).length > 0) {
+                args = this.arguments && this.arguments.map(function (a) {
+                    return { name: a.name, value: a.value.eval(env) };
+                });
+                for (var m = 0; m < mixins.length; m++) {
+                    if (mixins[m].match(args, env)) {
+                        try {
+                            Array.prototype.push.apply(
+                                  rules, mixins[m].eval(env, this.arguments, this.important).rules);
+                            match = true;
+                        } catch (e) {
+                            throw { message: e.message, index: this.index, filename: this.filename, stack: e.stack };
+                        }
+                    }
+                }
+                if (match) {
+                    return rules;
+                } else {
+                    throw { type:    'Runtime',
+                            message: 'No matching definition was found for `' +
+                                      this.selector.toCSS().trim() + '('      +
+                                      this.arguments.map(function (a) {
+                                          return a.toCSS();
+                                      }).join(', ') + ")`",
+                            index:   this.index, filename: this.filename };
+                }
+            }
+        }
+        throw { type: 'Name',
+                message: this.selector.toCSS().trim() + " is undefined",
+                index: this.index, filename: this.filename };
+    }
+};
+
+tree.mixin.Definition = function (name, params, rules, condition, variadic) {
+    this.name = name;
+    this.selectors = [new(tree.Selector)([new(tree.Element)(null, name)])];
+    this.params = params;
+    this.condition = condition;
+    this.variadic = variadic;
+    this.arity = params.length;
+    this.rules = rules;
+    this._lookups = {};
+    this.required = params.reduce(function (count, p) {
+        if (!p.name || (p.name && !p.value)) { return count + 1 }
+        else                                 { return count }
+    }, 0);
+    this.parent = tree.Ruleset.prototype;
+    this.frames = [];
+};
+tree.mixin.Definition.prototype = {
+    toCSS:     function ()     { return "" },
+    variable:  function (name) { return this.parent.variable.call(this, name) },
+    variables: function ()     { return this.parent.variables.call(this) },
+    find:      function ()     { return this.parent.find.apply(this, arguments) },
+    rulesets:  function ()     { return this.parent.rulesets.apply(this) },
+
+    evalParams: function (env, args) {
+        var frame = new(tree.Ruleset)(null, []), varargs, arg;
+
+        for (var i = 0, val, name; i < this.params.length; i++) {
+            arg = args && args[i]
+
+            if (arg && arg.name) {
+                frame.rules.unshift(new(tree.Rule)(arg.name, arg.value.eval(env)));
+                args.splice(i, 1);
+                i--;
+                continue;
+            }
+			
+            if (name = this.params[i].name) {
+                if (this.params[i].variadic && args) {
+                    varargs = [];
+                    for (var j = i; j < args.length; j++) {
+                        varargs.push(args[j].value.eval(env));
+                    }
+                    frame.rules.unshift(new(tree.Rule)(name, new(tree.Expression)(varargs).eval(env)));
+                } else if (val = (arg && arg.value) || this.params[i].value) {
+                    frame.rules.unshift(new(tree.Rule)(name, val.eval(env)));
+                } else {
+                    throw { type: 'Runtime', message: "wrong number of arguments for " + this.name +
+                            ' (' + args.length + ' for ' + this.arity + ')' };
+                }
+            }
+        }
+        return frame;
+    },
+    eval: function (env, args, important) {
+        var frame = this.evalParams(env, args), context, _arguments = [], rules, start;
+
+        for (var i = 0; i < Math.max(this.params.length, args && args.length); i++) {
+            _arguments.push((args[i] && args[i].value) || this.params[i].value);
+        }
+        frame.rules.unshift(new(tree.Rule)('@arguments', new(tree.Expression)(_arguments).eval(env)));
+
+        rules = important ?
+            this.rules.map(function (r) {
+                return new(tree.Rule)(r.name, r.value, '!important', r.index);
+            }) : this.rules.slice(0);
+
+        return new(tree.Ruleset)(null, rules).eval({
+            frames: [this, frame].concat(this.frames, env.frames)
+        });
+    },
+    match: function (args, env) {
+        var argsLength = (args && args.length) || 0, len, frame;
+
+        if (! this.variadic) {
+            if (argsLength < this.required)                               { return false }
+            if (argsLength > this.params.length)                          { return false }
+            if ((this.required > 0) && (argsLength > this.params.length)) { return false }
+        }
+
+        if (this.condition && !this.condition.eval({
+            frames: [this.evalParams(env, args)].concat(env.frames)
+        }))                                                           { return false }
+
+        len = Math.min(argsLength, this.arity);
+
+        for (var i = 0; i < len; i++) {
+            if (!this.params[i].name) {
+                if (args[i].value.eval(env).toCSS() != this.params[i].value.eval(env).toCSS()) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Operation = function (op, operands) {
+    this.op = op.trim();
+    this.operands = operands;
+};
+tree.Operation.prototype.eval = function (env) {
+    var a = this.operands[0].eval(env),
+        b = this.operands[1].eval(env),
+        temp;
+
+    if (a instanceof tree.Dimension && b instanceof tree.Color) {
+        if (this.op === '*' || this.op === '+') {
+            temp = b, b = a, a = temp;
+        } else {
+            throw { name: "OperationError",
+                    message: "Can't substract or divide a color from a number" };
+        }
+    }
+    return a.operate(this.op, b);
+};
+
+tree.operate = function (op, a, b) {
+    switch (op) {
+        case '+': return a + b;
+        case '-': return a - b;
+        case '*': return a * b;
+        case '/': return a / b;
+    }
+};
+
+})(require('../tree'));
+
+(function (tree) {
+
+tree.Paren = function (node) {
+    this.value = node;
+};
+tree.Paren.prototype = {
+    toCSS: function (env) {
+        return '(' + this.value.toCSS(env) + ')';
+    },
+    eval: function (env) {
+        return new(tree.Paren)(this.value.eval(env));
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Quoted = function (str, content, escaped, i) {
+    this.escaped = escaped;
+    this.value = content || '';
+    this.quote = str.charAt(0);
+    this.index = i;
+};
+tree.Quoted.prototype = {
+    toCSS: function () {
+        if (this.escaped) {
+            return this.value;
+        } else {
+            return this.quote + this.value + this.quote;
+        }
+    },
+    eval: function (env) {
+        var that = this;
+        var value = this.value.replace(/`([^`]+)`/g, function (_, exp) {
+            return new(tree.JavaScript)(exp, that.index, true).eval(env).value;
+        }).replace(/@\{([\w-]+)\}/g, function (_, name) {
+            var v = new(tree.Variable)('@' + name, that.index).eval(env);
+            return ('value' in v) ? v.value : v.toCSS();
+        });
+        return new(tree.Quoted)(this.quote + value + this.quote, value, this.escaped, this.index);
+    },
+    compare: function (x) {
+        if (!x.toCSS) {
+            return -1;
+        }
+        
+        var left = this.toCSS(),
+            right = x.toCSS();
+        
+        if (left === right) {
+            return 0;
+        }
+        
+        return left < right ? -1 : 1;
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Ratio = function (value) {
+    this.value = value;
+};
+tree.Ratio.prototype = {
+    toCSS: function (env) {
+        return this.value;
+    },
+    eval: function () { return this }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Rule = function (name, value, important, index, inline) {
+    this.name = name;
+    this.value = (value instanceof tree.Value) ? value : new(tree.Value)([value]);
+    this.important = important ? ' ' + important.trim() : '';
+    this.index = index;
+    this.inline = inline || false;
+
+    if (name.charAt(0) === '@') {
+        this.variable = true;
+    } else { this.variable = false }
+};
+tree.Rule.prototype.toCSS = function (env) {
+    if (this.variable) { return "" }
+    else {
+        return this.name + (env.compress ? ':' : ': ') +
+               this.value.toCSS(env) +
+               this.important + (this.inline ? "" : ";");
+    }
+};
+
+tree.Rule.prototype.eval = function (context) {
+    return new(tree.Rule)(this.name,
+                          this.value.eval(context),
+                          this.important,
+                          this.index, this.inline);
+};
+
+tree.Shorthand = function (a, b) {
+    this.a = a;
+    this.b = b;
+};
+
+tree.Shorthand.prototype = {
+    toCSS: function (env) {
+        return this.a.toCSS(env) + "/" + this.b.toCSS(env);
+    },
+    eval: function () { return this }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Ruleset = function (selectors, rules, strictImports) {
+    this.selectors = selectors;
+    this.rules = rules;
+    this._lookups = {};
+    this.strictImports = strictImports;
+};
+tree.Ruleset.prototype = {
+    eval: function (env) {
+        var selectors = this.selectors && this.selectors.map(function (s) { return s.eval(env) });
+        var ruleset = new(tree.Ruleset)(selectors, this.rules.slice(0), this.strictImports);
+        var rules = [];
+        
+        ruleset.root = this.root;
+        ruleset.allowImports = this.allowImports;
+
+        if(this.debugInfo) {
+            ruleset.debugInfo = this.debugInfo;
+        }
+
+        // push the current ruleset to the frames stack
+        env.frames.unshift(ruleset);
+
+        // Evaluate imports
+        if (ruleset.root || ruleset.allowImports || !ruleset.strictImports) {
+            for (var i = 0; i < ruleset.rules.length; i++) {
+                if (ruleset.rules[i] instanceof tree.Import) {
+                    rules = rules.concat(ruleset.rules[i].eval(env));
+                } else {
+                    rules.push(ruleset.rules[i]);
+                }
+            }
+            ruleset.rules = rules;
+            rules = [];
+        }
+
+        // Store the frames around mixin definitions,
+        // so they can be evaluated like closures when the time comes.
+        for (var i = 0; i < ruleset.rules.length; i++) {
+            if (ruleset.rules[i] instanceof tree.mixin.Definition) {
+                ruleset.rules[i].frames = env.frames.slice(0);
+            }
+        }
+        
+        var mediaBlockCount = (env.mediaBlocks && env.mediaBlocks.length) || 0;
+
+        // Evaluate mixin calls.
+        for (var i = 0; i < ruleset.rules.length; i++) {
+            if (ruleset.rules[i] instanceof tree.mixin.Call) {
+                rules = rules.concat(ruleset.rules[i].eval(env));
+            } else {
+                rules.push(ruleset.rules[i]);
+            }
+        }
+        ruleset.rules = rules;
+
+        // Evaluate everything else
+        for (var i = 0, rule; i < ruleset.rules.length; i++) {
+            rule = ruleset.rules[i];
+
+            if (! (rule instanceof tree.mixin.Definition)) {
+                ruleset.rules[i] = rule.eval ? rule.eval(env) : rule;
+            }
+        }
+
+        // Pop the stack
+        env.frames.shift();
+        
+        if (env.mediaBlocks) {
+            for(var i = mediaBlockCount; i < env.mediaBlocks.length; i++) {
+                env.mediaBlocks[i].bubbleSelectors(selectors);
+            }
+        }
+
+        return ruleset;
+    },
+    match: function (args) {
+        return !args || args.length === 0;
+    },
+    variables: function () {
+        if (this._variables) { return this._variables }
+        else {
+            return this._variables = this.rules.reduce(function (hash, r) {
+                if (r instanceof tree.Rule && r.variable === true) {
+                    hash[r.name] = r;
+                }
+                return hash;
+            }, {});
+        }
+    },
+    variable: function (name) {
+        return this.variables()[name];
+    },
+    rulesets: function () {
+        if (this._rulesets) { return this._rulesets }
+        else {
+            return this._rulesets = this.rules.filter(function (r) {
+                return (r instanceof tree.Ruleset) || (r instanceof tree.mixin.Definition);
+            });
+        }
+    },
+    find: function (selector, self) {
+        self = self || this;
+        var rules = [], rule, match,
+            key = selector.toCSS();
+
+        if (key in this._lookups) { return this._lookups[key] }
+
+        this.rulesets().forEach(function (rule) {
+            if (rule !== self) {
+                for (var j = 0; j < rule.selectors.length; j++) {
+                    if (match = selector.match(rule.selectors[j])) {
+                        if (selector.elements.length > rule.selectors[j].elements.length) {
+                            Array.prototype.push.apply(rules, rule.find(
+                                new(tree.Selector)(selector.elements.slice(1)), self));
+                        } else {
+                            rules.push(rule);
+                        }
+                        break;
+                    }
+                }
+            }
+        });
+        return this._lookups[key] = rules;
+    },
+    //
+    // Entry point for code generation
+    //
+    //     `context` holds an array of arrays.
+    //
+    toCSS: function (context, env) {
+        var css = [],      // The CSS output
+            rules = [],    // node.Rule instances
+           _rules = [],    //
+            rulesets = [], // node.Ruleset instances
+            paths = [],    // Current selectors
+            selector,      // The fully rendered selector
+            debugInfo,     // Line number debugging
+            rule;
+
+        if (! this.root) {
+            this.joinSelectors(paths, context, this.selectors);
+        }
+
+        // Compile rules and rulesets
+        for (var i = 0; i < this.rules.length; i++) {
+            rule = this.rules[i];
+
+            if (rule.rules || (rule instanceof tree.Directive) || (rule instanceof tree.Media)) {
+                rulesets.push(rule.toCSS(paths, env));
+            } else if (rule instanceof tree.Comment) {
+                if (!rule.silent) {
+                    if (this.root) {
+                        rulesets.push(rule.toCSS(env));
+                    } else {
+                        rules.push(rule.toCSS(env));
+                    }
+                }
+            } else {
+                if (rule.toCSS && !rule.variable) {
+                    rules.push(rule.toCSS(env));
+                } else if (rule.value && !rule.variable) {
+                    rules.push(rule.value.toString());
+                }
+            }
+        } 
+
+        rulesets = rulesets.join('');
+
+        // If this is the root node, we don't render
+        // a selector, or {}.
+        // Otherwise, only output if this ruleset has rules.
+        if (this.root) {
+            css.push(rules.join(env.compress ? '' : '\n'));
+        } else {
+            if (rules.length > 0) {
+                debugInfo = tree.debugInfo(env, this);
+                selector = paths.map(function (p) {
+                    return p.map(function (s) {
+                        return s.toCSS(env);
+                    }).join('').trim();
+                }).join(env.compress ? ',' : ',\n');
+
+                // Remove duplicates
+                for (var i = rules.length - 1; i >= 0; i--) {
+                    if (_rules.indexOf(rules[i]) === -1) {
+                        _rules.unshift(rules[i]);
+                    }
+                }
+                rules = _rules;
+
+                css.push(debugInfo + selector + 
+                        (env.compress ? '{' : ' {\n  ') +
+                        rules.join(env.compress ? '' : '\n  ') +
+                        (env.compress ? '}' : '\n}\n'));
+            }
+        }
+        css.push(rulesets);
+
+        return css.join('')  + (env.compress ? '\n' : '');
+    },
+
+    joinSelectors: function (paths, context, selectors) {
+        for (var s = 0; s < selectors.length; s++) {
+            this.joinSelector(paths, context, selectors[s]);
+        }
+    },
+
+    joinSelector: function (paths, context, selector) {
+
+        var i, j, k, 
+            hasParentSelector, newSelectors, el, sel, parentSel, 
+            newSelectorPath, afterParentJoin, newJoinedSelector, 
+            newJoinedSelectorEmpty, lastSelector, currentElements,
+            selectorsMultiplied;
+    
+        for (i = 0; i < selector.elements.length; i++) {
+            el = selector.elements[i];
+            if (el.value === '&') {
+                hasParentSelector = true;
+            }
+        }
+    
+        if (!hasParentSelector) {
+            if (context.length > 0) {
+                for(i = 0; i < context.length; i++) {
+                    paths.push(context[i].concat(selector));
+                }
+            }
+            else {
+                paths.push([selector]);
+            }
+            return;
+        }
+
+        // The paths are [[Selector]]
+        // The first list is a list of comma seperated selectors
+        // The inner list is a list of inheritance seperated selectors
+        // e.g.
+        // .a, .b {
+        //   .c {
+        //   }
+        // }
+        // == [[.a] [.c]] [[.b] [.c]]
+        //
+
+        // the elements from the current selector so far
+        currentElements = [];
+        // the current list of new selectors to add to the path.
+        // We will build it up. We initiate it with one empty selector as we "multiply" the new selectors
+        // by the parents
+        newSelectors = [[]];
+
+        for (i = 0; i < selector.elements.length; i++) {
+            el = selector.elements[i];
+            // non parent reference elements just get added
+            if (el.value !== "&") {
+                currentElements.push(el);
+            } else {
+                // the new list of selectors to add
+                selectorsMultiplied = [];
+
+                // merge the current list of non parent selector elements
+                // on to the current list of selectors to add
+                if (currentElements.length > 0) {
+                    this.mergeElementsOnToSelectors(currentElements, newSelectors);
+                }
+
+                // loop through our current selectors
+                for(j = 0; j < newSelectors.length; j++) {
+                    sel = newSelectors[j];
+                    // if we don't have any parent paths, the & might be in a mixin so that it can be used
+                    // whether there are parents or not
+                    if (context.length == 0) {
+                        // the combinator used on el should now be applied to the next element instead so that
+                        // it is not lost
+                        if (sel.length > 0) {
+                            sel[0].elements = sel[0].elements.slice(0);
+                            sel[0].elements.push(new(tree.Element)(el.combinator, '', 0)); //new Element(el.Combinator,  ""));
+                        }
+                        selectorsMultiplied.push(sel);
+                    }
+                    else {
+                        // and the parent selectors
+                        for(k = 0; k < context.length; k++) {
+                            parentSel = context[k];
+                            // We need to put the current selectors
+                            // then join the last selector's elements on to the parents selectors
+
+                            // our new selector path
+                            newSelectorPath = [];
+                            // selectors from the parent after the join
+                            afterParentJoin = [];
+                            newJoinedSelectorEmpty = true;
+
+                            //construct the joined selector - if & is the first thing this will be empty,
+                            // if not newJoinedSelector will be the last set of elements in the selector
+                            if (sel.length > 0) {
+                                newSelectorPath = sel.slice(0);
+                                lastSelector = newSelectorPath.pop();
+                                newJoinedSelector = new(tree.Selector)(lastSelector.elements.slice(0));
+                                newJoinedSelectorEmpty = false;
+                            }
+                            else {
+                                newJoinedSelector = new(tree.Selector)([]);
+                            }
+
+                            //put together the parent selectors after the join
+                            if (parentSel.length > 1) {
+                                afterParentJoin = afterParentJoin.concat(parentSel.slice(1));
+                            }
+
+                            if (parentSel.length > 0) {
+                                newJoinedSelectorEmpty = false;
+
+                                // join the elements so far with the first part of the parent
+                                newJoinedSelector.elements.push(new(tree.Element)(el.combinator, parentSel[0].elements[0].value, 0));
+                                newJoinedSelector.elements = newJoinedSelector.elements.concat(parentSel[0].elements.slice(1));
+                            }
+
+                            if (!newJoinedSelectorEmpty) {
+                                // now add the joined selector
+                                newSelectorPath.push(newJoinedSelector);
+                            }
+
+                            // and the rest of the parent
+                            newSelectorPath = newSelectorPath.concat(afterParentJoin);
+
+                            // add that to our new set of selectors
+                            selectorsMultiplied.push(newSelectorPath);
+                        }
+                    }
+                }
+
+                // our new selectors has been multiplied, so reset the state
+                newSelectors = selectorsMultiplied;
+                currentElements = [];
+            }
+        }
+
+        // if we have any elements left over (e.g. .a& .b == .b)
+        // add them on to all the current selectors
+        if (currentElements.length > 0) {
+            this.mergeElementsOnToSelectors(currentElements, newSelectors);
+        }
+
+        for(i = 0; i < newSelectors.length; i++) {
+            paths.push(newSelectors[i]);
+        }
+    },
+    
+    mergeElementsOnToSelectors: function(elements, selectors) {
+        var i, sel;
+
+        if (selectors.length == 0) {
+            selectors.push([ new(tree.Selector)(elements) ]);
+            return;
+        }
+
+        for(i = 0; i < selectors.length; i++) {
+            sel = selectors[i];
+
+            // if the previous thing in sel is a parent this needs to join on to it
+            if (sel.length > 0) {
+                sel[sel.length - 1] = new(tree.Selector)(sel[sel.length - 1].elements.concat(elements));
+            }
+            else {
+                sel.push(new(tree.Selector)(elements));
+            }
+        }
+    }
+};
+})(require('../tree'));
+(function (tree) {
+
+tree.Selector = function (elements) {
+    this.elements = elements;
+};
+tree.Selector.prototype.match = function (other) {
+    var len  = this.elements.length,
+        olen = other.elements.length,
+        max  = Math.min(len, olen);
+
+    if (len < olen) {
+        return false;
+    } else {
+        for (var i = 0; i < max; i++) {
+            if (this.elements[i].value !== other.elements[i].value) {
+                return false;
+            }
+        }
+    }
+    return true;
+};
+tree.Selector.prototype.eval = function (env) {
+    return new(tree.Selector)(this.elements.map(function (e) {
+        return e.eval(env);
+    }));
+};
+tree.Selector.prototype.toCSS = function (env) {
+    if (this._css) { return this._css }
+    
+    if (this.elements[0].combinator.value === "") {
+        this._css = ' ';
+    } else {
+        this._css = '';
+    }
+    
+    this._css += this.elements.map(function (e) {
+        if (typeof(e) === 'string') {
+            return ' ' + e.trim();
+        } else {
+            return e.toCSS(env);
+        }
+    }).join('');
+    
+    return this._css;
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.URL = function (val, paths) {
+    this.value = val;
+    this.paths = paths;
+};
+tree.URL.prototype = {
+    toCSS: function () {
+        return "url(" + this.value.toCSS() + ")";
+    },
+    eval: function (ctx) {
+        var val = this.value.eval(ctx);
+
+        // Add the base path if the URL is relative and we are in the browser
+        if (typeof window !== 'undefined' && typeof val.value === "string" && !/^(?:[a-z-]+:|\/)/.test(val.value) && this.paths.length > 0) {
+            val.value = this.paths[0] + (val.value.charAt(0) === '/' ? val.value.slice(1) : val.value);
+        }
+
+        return new(tree.URL)(val, this.paths);
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Value = function (value) {
+    this.value = value;
+    this.is = 'value';
+};
+tree.Value.prototype = {
+    eval: function (env) {
+        if (this.value.length === 1) {
+            return this.value[0].eval(env);
+        } else {
+            return new(tree.Value)(this.value.map(function (v) {
+                return v.eval(env);
+            }));
+        }
+    },
+    toCSS: function (env) {
+        return this.value.map(function (e) {
+            return e.toCSS(env);
+        }).join(env.compress ? ',' : ', ');
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.Variable = function (name, index, file) { this.name = name, this.index = index, this.file = file };
+tree.Variable.prototype = {
+    eval: function (env) {
+        var variable, v, name = this.name;
+
+        if (name.indexOf('@@') == 0) {
+            name = '@' + new(tree.Variable)(name.slice(1)).eval(env).value;
+        }
+
+        if (variable = tree.find(env.frames, function (frame) {
+            if (v = frame.variable(name)) {
+                return v.value.eval(env);
+            }
+        })) { return variable }
+        else {
+            throw { type: 'Name',
+                    message: "variable " + name + " is undefined",
+                    filename: this.file,
+                    index: this.index };
+        }
+    }
+};
+
+})(require('../tree'));
+(function (tree) {
+
+tree.debugInfo = function(env, ctx) {
+    var result="";
+    if (env.dumpLineNumbers && !env.compress) {
+        switch(env.dumpLineNumbers) {
+            case 'comments':
+                result = tree.debugInfo.asComment(ctx);
+                break;
+            case 'mediaquery':
+                result = tree.debugInfo.asMediaQuery(ctx);
+                break;
+            case 'all':
+                result = tree.debugInfo.asComment(ctx)+tree.debugInfo.asMediaQuery(ctx);
+                break;
+        }
+    }
+    return result;
+};
+
+tree.debugInfo.asComment = function(ctx) {
+    return '/* line ' + ctx.debugInfo.lineNumber + ', ' + ctx.debugInfo.fileName + ' */\n';
+};
+
+tree.debugInfo.asMediaQuery = function(ctx) {
+    return '@media -sass-debug-info{filename{font-family:"' + ctx.debugInfo.fileName + '";}line{font-family:"' + ctx.debugInfo.lineNumber + '";}}\n';
+};
+
+tree.find = function (obj, fun) {
+    for (var i = 0, r; i < obj.length; i++) {
+        if (r = fun.call(obj, obj[i])) { return r }
+    }
+    return null;
+};
+tree.jsify = function (obj) {
+    if (Array.isArray(obj.value) && (obj.value.length > 1)) {
+        return '[' + obj.value.map(function (v) { return v.toCSS(false) }).join(', ') + ']';
+    } else {
+        return obj.toCSS(false);
+    }
+};
+
+})(require('./tree'));
+//
+// browser.js - client-side engine
+//
+
+var isFileProtocol = /^(file|chrome(-extension)?|resource|qrc|app):/.test(location.protocol);
+
+less.env = less.env || (location.hostname == '127.0.0.1' ||
+                        location.hostname == '0.0.0.0'   ||
+                        location.hostname == 'localhost' ||
+                        location.port.length > 0         ||
+                        isFileProtocol                   ? 'development'
+                                                         : 'production');
+
+// Load styles asynchronously (default: false)
+//
+// This is set to `false` by default, so that the body
+// doesn't start loading before the stylesheets are parsed.
+// Setting this to `true` can result in flickering.
+//
+less.async = less.async || false;
+less.fileAsync = less.fileAsync || false;
+
+// Interval between watch polls
+less.poll = less.poll || (isFileProtocol ? 1000 : 1500);
+
+//
+// Watch mode
+//
+less.watch   = function () { return this.watchMode = true };
+less.unwatch = function () { return this.watchMode = false };
+
+if (less.env === 'development') {
+    less.optimization = 0;
+
+    if (/!watch/.test(location.hash)) {
+        less.watch();
+    }
+    var dumpLineNumbers = /!dumpLineNumbers:(comments|mediaquery|all)/.exec(location.hash);
+    if (dumpLineNumbers) {
+        less.dumpLineNumbers = dumpLineNumbers[1];
+    }
+    less.watchTimer = setInterval(function () {
+        if (less.watchMode) {
+            loadStyleSheets(function (e, root, _, sheet, env) {
+                if (root) {
+                    createCSS(root.toCSS(), sheet, env.lastModified);
+                }
+            });
+        }
+    }, less.poll);
+} else {
+    less.optimization = 3;
+}
+
+var cache;
+
+try {
+    cache = (typeof(window.localStorage) === 'undefined') ? null : window.localStorage;
+} catch (_) {
+    cache = null;
+}
+
+//
+// Get all <link> tags with the 'rel' attribute set to "stylesheet/less"
+//
+var links = document.getElementsByTagName('link');
+var typePattern = /^text\/(x-)?less$/;
+
+less.sheets = [];
+
+for (var i = 0; i < links.length; i++) {
+    if (links[i].rel === 'stylesheet/less' || (links[i].rel.match(/stylesheet/) &&
+       (links[i].type.match(typePattern)))) {
+        less.sheets.push(links[i]);
+    }
+}
+
+
+less.refresh = function (reload) {
+    var startTime, endTime;
+    startTime = endTime = new(Date);
+
+    loadStyleSheets(function (e, root, _, sheet, env) {
+        if (env.local) {
+            log("loading " + sheet.href + " from cache.");
+        } else {
+            log("parsed " + sheet.href + " successfully.");
+            createCSS(root.toCSS(), sheet, env.lastModified);
+        }
+        log("css for " + sheet.href + " generated in " + (new(Date) - endTime) + 'ms');
+        (env.remaining === 0) && log("css generated in " + (new(Date) - startTime) + 'ms');
+        endTime = new(Date);
+    }, reload);
+
+    loadStyles();
+};
+less.refreshStyles = loadStyles;
+
+less.refresh(less.env === 'development');
+
+function loadStyles() {
+    var styles = document.getElementsByTagName('style');
+    for (var i = 0; i < styles.length; i++) {
+        if (styles[i].type.match(typePattern)) {
+            new(less.Parser)({
+                filename: document.location.href.replace(/#.*$/, ''),
+                dumpLineNumbers: less.dumpLineNumbers
+            }).parse(styles[i].innerHTML || '', function (e, tree) {
+                var css = tree.toCSS();
+                var style = styles[i];
+                style.type = 'text/css';
+                if (style.styleSheet) {
+                    style.styleSheet.cssText = css;
+                } else {
+                    style.innerHTML = css;
+                }
+            });
+        }
+    }
+}
+
+function loadStyleSheets(callback, reload) {
+    for (var i = 0; i < less.sheets.length; i++) {
+        loadStyleSheet(less.sheets[i], callback, reload, less.sheets.length - (i + 1));
+    }
+}
+
+function loadStyleSheet(sheet, callback, reload, remaining) {
+    var contents  = sheet.contents || {};  // Passing a ref to top importing parser content cache trough 'sheet' arg.
+    var url       = window.location.href.replace(/[#?].*$/, '');
+    var href      = sheet.href.replace(/\?.*$/, '');
+    var css       = cache && cache.getItem(href);
+    var timestamp = cache && cache.getItem(href + ':timestamp');
+    var styles    = { css: css, timestamp: timestamp };
+
+    // Stylesheets in IE don't always return the full path
+    if (! /^[a-z-]+:/.test(href)) {
+        if (href.charAt(0) == "/") {
+            href = window.location.protocol + "//" + window.location.host + href;
+        } else {
+            href = url.slice(0, url.lastIndexOf('/') + 1) + href;
+        }
+    }
+    xhr(sheet.href, sheet.type, function (data, lastModified) {
+        if (!reload && styles && lastModified &&
+           (new(Date)(lastModified).valueOf() ===
+            new(Date)(styles.timestamp).valueOf())) {
+            // Use local copy
+            createCSS(styles.css, sheet);
+            callback(null, null, data, sheet, { local: true, remaining: remaining });
+        } else {
+            // Use remote copy (re-parse)
+            try {
+                contents[href] = data;  // Updating top importing parser content cache
+                new(less.Parser)({
+                    optimization: less.optimization,
+                    paths: [href.replace(/[\w\.-]+$/, '')],
+                    mime: sheet.type,
+                    filename: href,
+                    'contents': contents,    // Passing top importing parser content cache ref down.
+                    dumpLineNumbers: less.dumpLineNumbers
+                }).parse(data, function (e, root) {
+                    if (e) { return error(e, href) }
+                    try {
+                        callback(e, root, data, sheet, { local: false, lastModified: lastModified, remaining: remaining });
+                        removeNode(document.getElementById('less-error-message:' + extractId(href)));
+                    } catch (e) {
+                        error(e, href);
+                    }
+                });
+            } catch (e) {
+                error(e, href);
+            }
+        }
+    }, function (status, url) {
+        throw new(Error)("Couldn't load " + url + " (" + status + ")");
+    });
+}
+
+function extractId(href) {
+    return href.replace(/^[a-z]+:\/\/?[^\/]+/, '' )  // Remove protocol & domain
+               .replace(/^\//,                 '' )  // Remove root /
+               .replace(/\?.*$/,               '' )  // Remove query
+               .replace(/\.[^\.\/]+$/,         '' )  // Remove file extension
+               .replace(/[^\.\w-]+/g,          '-')  // Replace illegal characters
+               .replace(/\./g,                 ':'); // Replace dots with colons(for valid id)
+}
+
+function createCSS(styles, sheet, lastModified) {
+    var css;
+
+    // Strip the query-string
+    var href = sheet.href ? sheet.href.replace(/\?.*$/, '') : '';
+
+    // If there is no title set, use the filename, minus the extension
+    var id = 'less:' + (sheet.title || extractId(href));
+
+    // If the stylesheet doesn't exist, create a new node
+    if ((css = document.getElementById(id)) === null) {
+        css = document.createElement('style');
+        css.type = 'text/css';
+        if( sheet.media ){ css.media = sheet.media; }
+        css.id = id;
+        var nextEl = sheet && sheet.nextSibling || null;
+        document.getElementsByTagName('head')[0].insertBefore(css, nextEl);
+    }
+
+    if (css.styleSheet) { // IE
+        try {
+            css.styleSheet.cssText = styles;
+        } catch (e) {
+            throw new(Error)("Couldn't reassign styleSheet.cssText.");
+        }
+    } else {
+        (function (node) {
+            if (css.childNodes.length > 0) {
+                if (css.firstChild.nodeValue !== node.nodeValue) {
+                    css.replaceChild(node, css.firstChild);
+                }
+            } else {
+                css.appendChild(node);
+            }
+        })(document.createTextNode(styles));
+    }
+
+    // Don't update the local store if the file wasn't modified
+    if (lastModified && cache) {
+        log('saving ' + href + ' to cache.');
+        try {
+            cache.setItem(href, styles);
+            cache.setItem(href + ':timestamp', lastModified);
+        } catch(e) {
+            //TODO - could do with adding more robust error handling
+            log('failed to save');
+        }
+    }
+}
+
+function xhr(url, type, callback, errback) {
+    var xhr = getXMLHttpRequest();
+    var async = isFileProtocol ? less.fileAsync : less.async;
+
+    if (typeof(xhr.overrideMimeType) === 'function') {
+        xhr.overrideMimeType('text/css');
+    }
+    xhr.open('GET', url, async);
+    xhr.setRequestHeader('Accept', type || 'text/x-less, text/css; q=0.9, */*; q=0.5');
+    xhr.send(null);
+
+    if (isFileProtocol && !less.fileAsync) {
+        if (xhr.status === 0 || (xhr.status >= 200 && xhr.status < 300)) {
+            callback(xhr.responseText);
+        } else {
+            errback(xhr.status, url);
+        }
+    } else if (async) {
+        xhr.onreadystatechange = function () {
+            if (xhr.readyState == 4) {
+                handleResponse(xhr, callback, errback);
+            }
+        };
+    } else {
+        handleResponse(xhr, callback, errback);
+    }
+
+    function handleResponse(xhr, callback, errback) {
+        if (xhr.status >= 200 && xhr.status < 300) {
+            callback(xhr.responseText,
+                     xhr.getResponseHeader("Last-Modified"));
+        } else if (typeof(errback) === 'function') {
+            errback(xhr.status, url);
+        }
+    }
+}
+
+function getXMLHttpRequest() {
+    if (window.XMLHttpRequest) {
+        return new(XMLHttpRequest);
+    } else {
+        try {
+            return new(ActiveXObject)("MSXML2.XMLHTTP.3.0");
+        } catch (e) {
+            log("browser doesn't support AJAX.");
+            return null;
+        }
+    }
+}
+
+function removeNode(node) {
+    return node && node.parentNode.removeChild(node);
+}
+
+function log(str) {
+    if (less.env == 'development' && typeof(console) !== "undefined") { console.log('less: ' + str) }
+}
+
+function error(e, href) {
+    var id = 'less-error-message:' + extractId(href);
+    var template = '<li><label>{line}</label><pre class="{class}">{content}</pre></li>';
+    var elem = document.createElement('div'), timer, content, error = [];
+    var filename = e.filename || href;
+    var filenameNoPath = filename.match(/([^\/]+)$/)[1];
+
+    elem.id        = id;
+    elem.className = "less-error-message";
+
+    content = '<h3>'  + (e.message || 'There is an error in your .less file') +
+              '</h3>' + '<p>in <a href="' + filename   + '">' + filenameNoPath + "</a> ";
+
+    var errorline = function (e, i, classname) {
+        if (e.extract[i]) {
+            error.push(template.replace(/\{line\}/, parseInt(e.line) + (i - 1))
+                               .replace(/\{class\}/, classname)
+                               .replace(/\{content\}/, e.extract[i]));
+        }
+    };
+
+    if (e.stack) {
+        content += '<br/>' + e.stack.split('\n').slice(1).join('<br/>');
+    } else if (e.extract) {
+        errorline(e, 0, '');
+        errorline(e, 1, 'line');
+        errorline(e, 2, '');
+        content += 'on line ' + e.line + ', column ' + (e.column + 1) + ':</p>' +
+                    '<ul>' + error.join('') + '</ul>';
+    }
+    elem.innerHTML = content;
+
+    // CSS for error messages
+    createCSS([
+        '.less-error-message ul, .less-error-message li {',
+            'list-style-type: none;',
+            'margin-right: 15px;',
+            'padding: 4px 0;',
+            'margin: 0;',
+        '}',
+        '.less-error-message label {',
+            'font-size: 12px;',
+            'margin-right: 15px;',
+            'padding: 4px 0;',
+            'color: #cc7777;',
+        '}',
+        '.less-error-message pre {',
+            'color: #dd6666;',
+            'padding: 4px 0;',
+            'margin: 0;',
+            'display: inline-block;',
+        '}',
+        '.less-error-message pre.line {',
+            'color: #ff0000;',
+        '}',
+        '.less-error-message h3 {',
+            'font-size: 20px;',
+            'font-weight: bold;',
+            'padding: 15px 0 5px 0;',
+            'margin: 0;',
+        '}',
+        '.less-error-message a {',
+            'color: #10a',
+        '}',
+        '.less-error-message .error {',
+            'color: red;',
+            'font-weight: bold;',
+            'padding-bottom: 2px;',
+            'border-bottom: 1px dashed red;',
+        '}'
+    ].join('\n'), { title: 'error-message' });
+
+    elem.style.cssText = [
+        "font-family: Arial, sans-serif",
+        "border: 1px solid #e00",
+        "background-color: #eee",
+        "border-radius: 5px",
+        "-webkit-border-radius: 5px",
+        "-moz-border-radius: 5px",
+        "color: #e00",
+        "padding: 15px",
+        "margin-bottom: 15px"
+    ].join(';');
+
+    if (less.env == 'development') {
+        timer = setInterval(function () {
+            if (document.body) {
+                if (document.getElementById(id)) {
+                    document.body.replaceChild(elem, document.getElementById(id));
+                } else {
+                    document.body.insertBefore(elem, document.body.firstChild);
+                }
+                clearInterval(timer);
+            }
+        }, 10);
+    }
+}
+
+// amd.js
+//
+// Define Less as an AMD module.
+if (typeof define === "function" && define.amd) {
+    define("less", [], function () { return less; } );
+}
+})(window);
+
 /**
  * StyleFix 1.0.3 & PrefixFree 1.0.7
  * @author Lea Verou
@@ -19376,7 +15953,7 @@ StyleFix.register(self.prefixCSS);
 define("prefixfree", function(){});
 
 define('patterns/autofocus',[
-    'jquery',
+    "jquery",
     "../registry"
 ], function($, registry) {
     var autofocus = {
@@ -19409,37 +15986,85 @@ define('patterns/autofocus',[
  */
 define('core/parser',[
     'jquery',
-    '../logging'
-], function($, logging) {
-    var log = logging.getLogger('parser');
+    './logger'
+], function($, logger) {
+    var log = logger.getLogger('parser');
 
     function ArgumentParser(name) {
         this.order = [];
-        this.mappings = {};
         this.parameters = {};
         this.attribute = "data-pat-" + name;
+        this.enum_values = {};
+        this.enum_conflicts = [];
+        this.groups = {};
+        this.possible_groups = {};
     }
 
     ArgumentParser.prototype = {
-        named_param_pattern: /^\s*([a-zA-Z0-9\-]+)\s*:(.*)/,
+        group_pattern: /([a-z][a-z0-9]*)-([A-Z][a-z0-0\-]*)/i,
+        named_param_pattern: /^\s*([a-z][a-z0-9\-]*)\s*:(.*)/i,
 
-        add_argument: function(name, default_value, choices) {
-            var js_name = name.replace(/\-([a-z])/g, function(_,p1){return p1.toUpperCase();}),
-                spec;
+        _camelCase: function(str) {
+            return str.replace(/\-([a-z])/g, function(_, p1){
+                return p1.toUpperCase();
+            });
+        },
 
+        add_argument: function(name, default_value, choices, multiple) {
+            var spec, m;
+
+            if (!multiple && default_value===undefined)
+                default_value=null;
+            if (multiple && !Array.isArray(default_value))
+                default_value=[default_value];
             spec={name: name,
-                  value: (default_value===undefined) ? null : default_value};
+                  value: default_value,
+                  multiple: multiple,
+                  dest: name,
+                  group: null};
+
             if (choices && Array.isArray(choices) && choices.length) {
                 spec.choices=choices;
                 spec.type=this._typeof(choices[0]);
+                for (var i=0; i<choices.length; i++)
+                    if (this.enum_conflicts.indexOf(choices[i])!==-1)
+                        continue;
+                    else if (choices[i] in this.enum_values) {
+                        this.enum_conflicts.push(choices[i]);
+                        delete this.enum_values[choices[i]];
+                    } else
+                        this.enum_values[choices[i]]=name;
             } else if (typeof spec.value==="string" && spec.value.slice(0, 1)==="$")
                 spec.type=this.parameters[spec.value.slice(1)].type;
             else
-                spec.type=this._typeof(spec.value);
+                // Note that this will get reset by _defaults if default_value is a function.
+                spec.type=this._typeof(multiple ? spec.value[0] : spec.value);
 
+            m=name.match(this.group_pattern);
+            if (m) {
+                var group=m[1], field=m[2];
+                if (group in this.possible_groups) {
+                    var first_spec = this.possible_groups[group],
+                        first_name = first_spec.name.match(this.group_pattern)[2];
+                    first_spec.group=group;
+                    first_spec.dest=first_name;
+                    this.groups[group]=new ArgumentParser();
+                    this.groups[group].add_argument(
+                            first_name,
+                            spec.value, spec.cohices, spec.multiple);
+                    delete this.possible_groups[group];
+                }
+                if (group in this.groups) {
+                    this.groups[group].add_argument(field, default_value, choices, multiple);
+                    spec.group=group;
+                    spec.dest=field;
+                } else {
+                    this.possible_groups[group]=spec;
+                    spec.dest=this._camelCase(spec.name);
+                }
+            }
             this.order.push(name);
-            this.mappings[name]=js_name;
-            this.parameters[js_name]=spec;
+            this.parameters[name]=spec;
         },
 
         _typeof: function(obj) {
@@ -19449,15 +16074,11 @@ define('core/parser',[
             return type;
         },
 
-        _set: function(opts, name, value) {
-            if (!(name in this.parameters)) {
-                log.debug("Ignoring value for unknown argument " + name);
-                return;
-            }
-
+        _coerce: function(name, value) {
             var spec=this.parameters[name];
-            try {
-                if (typeof value !== spec.type)
+
+            if (typeof value !== spec.type)
+                try {
                     switch (spec.type) {
                         case "boolean":
                             if (typeof value === "string") {
@@ -19491,67 +16112,185 @@ define('core/parser',[
                         default:
                             throw ("Do not know how to convert value for " + name + " to " + spec.type);
                     }
-
-                if (spec.choices && spec.choices.indexOf(value)===-1)
-                    log.warn("Illegal value for " + name + ": " + value);
-                else
-                    opts[name]=value;
-            } catch (e) {
-                log.warn(e);
-            }
-        },
-
-        _parse: function(parameter) {
-            var opts = {}, i, name;
-
-            if (parameter) {
-                var parts = parameter.split(";"),
-                    part, matches;
-
-                // Grab all positional parameters
-                i=-1;
-                while (parts.length) {
-                    i++;
-                    if (i>=this.order.length) {
-                        break;
-                    }
-                    part = parts.shift().trim();
-                    if (!part)
-                        continue;
-                    if (this.named_param_pattern.test(part)) {
-                        parts.unshift(part);
-                        break;
-                    }
-                    this._set(opts, this.mappings[this.order[i]], part.trim());
+                } catch (e) {
+                    log.warn(e);
+                    return null;
                 }
 
-                // Handle all named parameters
+            if (spec.choices && spec.choices.indexOf(value)===-1) {
+                log.warn("Illegal value for " + name + ": " + value);
+                return null;
+            }
+
+            return value;
+        },
+
+        _set: function(opts, name, value) {
+            if (!(name in this.parameters)) {
+                log.debug("Ignoring value for unknown argument " + name);
+                return;
+            }
+
+            var spec=this.parameters[name];
+            if (spec.multiple) {
+                var parts=value.split(/,+/), i, v;
+                value=[];
                 for (i=0; i<parts.length; i++) {
-                    if (!parts[i])
-                        continue;
+                    v=this._coerce(name, parts[i].trim());
+                    if (v!==null)
+                        value.push(v);
+                }
+            } else {
+                value=this._coerce(name, value);
+                if (value===null) 
+                    return;
+            }
 
-                    matches = parts[i].match(this.named_param_pattern);
-                    if (!matches) {
-                        log.warn("Positional parameters not allowed after named parameters");
-                        break;
-                    }
-                    if (this.parameters[this.mappings[matches[1]]] === undefined) {
-                        log.warn("Unknown named parameter " + matches[1]);
-                        continue;
-                    }
+            opts[name]=value;
+        },
 
-                    this._set(opts, this.mappings[matches[1]], matches[2].trim());
+        _parseExtendedNotation: function(parameter) {
+            var opts = {}, i,
+                parts = parameter.split(";"),
+                matches;
+
+            for (i=0; i<parts.length; i++) {
+                if (!parts[i])
+                    continue;
+
+                matches = parts[i].match(this.named_param_pattern);
+                if (!matches) {
+                    log.warn("Invalid parameter: " + parts[i]);
+                    break;
+                }
+
+                var name = matches[1],
+                    value = matches[2].trim();
+
+                if (name in this.parameters)
+                    this._set(opts, name, value);
+                else if (name in this.groups) {
+                    var subopt = this.groups[name]._parseShorthandNotation(value);
+                    for (var field in subopt)
+                        this._set(opts, name+"-"+field, subopt[field]);
+                } else {
+                    log.warn("Unknown named parameter " + matches[1]);
+                    continue;
                 }
             }
 
             return opts;
         },
 
-        _defaults: function() {
+        _parseShorthandNotation: function(parameter) {
+            var parts = parameter.split(/\s+/),
+                opts = {},
+                positional = true,
+                i, part, flag, sense, matches;
+
+            i=0;
+            while (parts.length) {
+                part=parts.shift().trim();
+                if (part.slice(0, 3)==="no-") {
+                    sense=false;
+                    flag=part.slice(3);
+                } else {
+                    sense=true;
+                    flag=part;
+                }
+                if (flag in this.parameters && this.parameters[flag].type==="boolean") {
+                    positional=false;
+                    this._set(opts, flag, sense);
+                } else if (flag in this.enum_values) {
+                    positional=false;
+                    this._set(opts, this.enum_values[flag], flag);
+                } else if (positional)
+                    this._set(opts, this.order[i], part);
+                else {
+                    parts.unshift(part);
+                    break;
+                }
+
+                i++;
+                if (i>=this.order.length)
+                    break;
+            }
+            if (parts.length)
+                log.warn("Ignore extra arguments: " + parts.join(" "));
+            return opts;
+        },
+
+        _parse: function(parameter) {
+            var opts, extended, sep;
+
+            if (!parameter)
+                return {};
+
+            if (parameter.match(this.named_param_pattern))
+                return this._parseExtendedNotation(parameter);
+
+            sep=parameter.indexOf(";");
+            if (sep===-1)
+                return this._parseShorthandNotation(parameter);
+
+            opts=this._parseShorthandNotation(parameter.slice(0, sep));
+            extended=this._parseExtendedNotation(parameter.slice(sep+1));
+            for (var name in extended)
+                opts[name]=extended[name];
+            return opts;
+        },
+
+        _defaults: function($el) {
             var result = {};
             for (var name in this.parameters)
-                result[name]=this.parameters[name].value;
+                if (typeof this.parameters[name].value==="function")
+                    try {
+                        result[name]=this.parameters[name].value($el, name);
+                        this.parameters[name].type=typeof result[name];
+                    } catch(e) {
+                        log.error("Default function for " + name + " failed.");
+                    }
+                else
+                    result[name]=this.parameters[name].value;
             return result;
+        },
+
+        _cleanupOptions: function(options) {
+            var keys = Object.keys(options),
+                i, spec, name, group;
+
+            // Resolve references
+            for (i=0; i<keys.length; i++) {
+                name=keys[i];
+                spec=this.parameters[name];
+                if (spec===undefined)
+                    continue;
+
+                if (options[name]===spec.value &&
+                        typeof spec.value==="string" && spec.value.slice(0, 1)==="$")
+                    options[name]=options[spec.value.slice(1)];
+            }
+
+            // Move options into groups and do renames
+            keys=Object.keys(options);
+            for (i=0; i<keys.length; i++) {
+                name=keys[i];
+                spec=this.parameters[name];
+                if (spec===undefined)
+                    continue;
+
+                if (spec.group)  {
+                    if (typeof options[spec.group]!=="object")
+                        options[spec.group]={};
+                    target=options[spec.group];
+                } else
+                    target=options;
+
+                if (spec.dest!==name) {
+                    target[spec.dest]=options[name];
+                    delete options[name];
+                }
+            }
         },
 
         parse: function($el, options, multiple) {
@@ -19560,7 +16299,7 @@ define('core/parser',[
                 options={};
             }
 
-            var stack = [[this._defaults()]];
+            var stack = [[this._defaults($el)]];
 
             var $parents = $el.parents().andSelf(),
                 final_length = 1,
@@ -19602,14 +16341,8 @@ define('core/parser',[
                 }
             }
 
-            // Resolve references
-            var name, value, spec;
             for (i=0; i<results.length; i++)
-                for (name in results[i]) {
-                    spec=this.parameters[name];
-                    if (results[i][name]===spec.value && typeof spec.value==="string" && spec.value.slice(0, 1)==="$")
-                        results[i][name]=results[i][spec.value.slice(1)];
-                }
+                this._cleanupOptions(results[i]);
 
             return multiple ? results : results[0];
         }
@@ -19620,180 +16353,167 @@ define('core/parser',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
-define('patterns/autosubmit',[
+define('patterns/autoscale',[
     "jquery",
     "../registry",
-    "../logging",
-    "../core/parser",
-    "../utils"
-], function($, patterns, logging, Parser, utils) {
-    var log = logging.getLogger("autosubmit"),
-        parser = new Parser("autosubmit");
-    parser.add_argument("delay");
+    "../core/parser"
+], function($, registry, Parser) {
+    var parser = new Parser("auto-scale");
+    parser.add_argument("method", "scale", ["scale", "zoom"]);
 
-    var autosubmit = {
-        name: "autosubmit",
-        trigger: ".pat-autosubmit",
+    var _ = {
+        name: "autoscale",
+        trigger: ".pat-auto-scale",
+        force_method: null,
 
-        parse: function($trigger) {
-            var options = parser.parse($trigger);
-            if (Array.isArray(options)) {
-                log.error("autosubmit does not support multiple options");
-                options = options[0];
-            }
-            return options;
+        _setup: function() {
+            if ($.browser.mozilla)
+                _.force_method="scale";
+            else if ($.browser.msie && parseInt($.browser.version, 10)<10)
+                _.force_method="zoom";
+            $(window).on("resize.autoscale", _.onResize);
         },
 
-        validateOptions: function(options) {
-            if (typeof options.delay==="string") {
-                if (options.delay==="delay" || options.delay==="true")
-                    options.delay=400;
-                else {
-                    var number = parseInt(options.delay, 10);
-                    if (isNaN(number)) {
-                        log.error("Invalid delay value");
-                        return null;
-                    }
-                    options.delay=number;
+        init: function($el, opts) {
+            return $el.each(function() {
+                var $el = $(this),
+                    method = _.force_method;
+                if (method===null) {
+                    var options = parser.parse($el, opts);
+                    method=options.method;
+                    $el.data("patterns.auto-scale", method);
                 }
-            } else if (typeof options.delay==="number") {
-                if (options.delay<0) {
-                    log.error("Timetravel machine broken - negative delay not possible.");
-                    return null;
-                }
-            } else if (options.delay) {
-                log.error("Invalid delay value");
-                return null;
-            }
-            return options;
-        },
-
-        onChange: function(event) {
-            var $trigger = $(this),
-                $form = this.tagName==="FORM" ? $trigger : $trigger.closest("form");
-
-            if ($trigger.hasClass("auto-suggest")) {
-                log.debug("Ignored event from autosuggest field.");
-                return;
-            }
-
-            if ($trigger.is("input[type=search]")) {
-                // clicking X on type=search deletes data attrs,
-                // therefore we store the old value on the form.
-                var name = $victim.attr('name'),
-                    key = name + '-autosubmit-oldvalue',
-                    oldvalue = $form.data(key) || "",
-                    curvalue = $target[0].value || "";
-
-                if (!name)
-                    log.warn('type=search without name, will be a problem' +
-                             ' if there are multiple', $target);
-                if (oldvalue===curvalue)
-                    return;
-                $form.data(key, curvalue);
-            }
-
-            log.info("triggered by " + event.type);
-            $form.submit();
-            event.stopPropagation();
-        },
-
-        init: function($root, defaults) {
-            defaults = defaults || {};
-            return $root
-                .find("input[type-search]").andSelf()
-                .each(function() {
-                var $trigger = $(this),
-                    options = $.extend({}, autosubmit.parse($trigger), defaults);
-                options=autosubmit.validateOptions(options);
-                if (!options)
-                    return;
-
-                var func = autosubmit.onChange;
-                if (options.delay)
-                    func=utils.debounce(func, options.delay);
-                $trigger
-                    .data("patternAutosubmit", options)
-                    .off(".patternAutosubmit")
-                    .on("change.patternAutosubmit", func)
-                    .on("keyup.patternAutosubmit", "input:not([type=file],[type=checkbox],[type=radio],[type=hidden],[type=image],[type=password],[type=submit])", func);
+                _.scale.apply(this, []);
             });
         },
 
-        destroy: function($root) {
-            return $root
-                .find("input[type-search]").andSelf()
-                .each(function() {
-                          $(this).removeData("patternAutosubmit").off(".patternAutosubmit");
-                      });
+        scale: function() {
+            var $el = $(this),
+                method = _.force_method,
+                scale;
+
+            if ($el[0].tagName.toLowerCase()==="body")
+                scale = $(window).width()/$el.outerWidth();
+            else
+                scale = $el.parent().outerWidth()/$el.outerWidth();
+
+            if (method===null)
+                method=$el.data("patterns.auto-scale");
+            switch (method) {
+            case "scale":
+                $el.css("transform", "scale(" + scale + ")");
+                break;
+            case "zoom":
+                $el.css("zoom", scale);
+                break;
+            }
+            $el.addClass("scaled");
+        },
+
+        onResize: function() {
+            $(_.trigger).each(_.scale);
         }
     };
 
-    patterns.register(autosubmit);
-    return autosubmit;
+    _._setup();
+    registry.register(_);
+    return _;
 });
 
-// jshint indent: 4, browser: true, jquery: true, quotmark: double
-// vim: sw=4 expandtab
-;
-define('patterns/autosubmit2',[
+define('patterns/autosubmit',[
     "jquery",
-    '../registry',
-    '../logging',
-    '../utils'
-], function($, registry, logging, utils) {
-    var log = logging.getLogger('autosubmit');
+    "../registry",
+    "../core/logger",
+    "../core/parser",
+    "../utils"
+], function($, registry, logging, Parser, utils) {
+    var log = logging.getLogger("autosubmit"),
+        parser = new Parser("autosubmit");
+
+    // XXX: would be great if the parser would handle validation and
+    // interpretation of boolean values:
+    // - integer >=0
+    // - false -> delay=0
+    // - true -> delay=default
+    // - string "defocus"
+    parser.add_argument("delay", 400);
 
     var _ = {
-        name: "autosubmit2",
-        trigger: ".pat-autosubmit2, .pat-autosubmit2-keyup",
-        init: function($el) {
-            return $el.each(function() {
-                var $el = $(this);
+        name: "autosubmit",
+        trigger: ".pat-autosubmit",
+        init: function($el, opts) {
+            if ($el.length > 1)
+                return $el.each(function() { _.init($(this), opts); });
 
-                // submit if a (specific) form element changed
-                $el.on("change.pat-autosubmit2", _.submit);
+            // submit if a (specific) form element changed
+            $el.on("change.pat-autosubmit", _.considerSubmit);
 
-                // debounced keyup submit, if enabled
-                if ($el.hasClass('pat-autosubmit2-keyup')) {
-                    ($el.is('input') ? $el : $el.find('input'))
-                        .on("keyup.pat-autosubmit2", utils.debounce(_.submit, 400));
-                }
+            var cfg = parser.parse($el, opts);
 
-                // XXX: test whether on webkit and enable only if supported
-                ($el.is('input[type=search]') ? $el : $el.find('input[type=search]'))
-                    .on("click.pat-autosubmit2", _.submit);
-            });
+            // XXX: defocus currently does not work as the parser
+            // returns the default value instead.
+            if (cfg.delay !== "defocus") {
+                var submit = _.considerSubmit;
+                if (cfg.delay === true)
+                    cfg.delay = 400;
+                if (cfg.delay)
+                    submit = utils.debounce(_.considerSubmit, cfg.delay);
+                ($el.is("input") ? $el : $el.find("input"))
+                    .on("keyup.pat-autosubmit", submit);
+            }
+
+            // XXX: test whether on webkit and enable only if
+            // supported
+            //
+            // XXX: this should be handled by writing code that
+            // triggers a change event in case the "Clear field
+            // button" inside the search is pressed
+            ($el.is("input[type=search]") ? $el : $el.find("input[type=search]"))
+                .on("click.pat-autosubmit", _.considerSubmit);
+
+            return $el;
         },
-        submit: function(ev) {
+        parser: parser,
+        destroy: function($el) {
+            $el.off(".pat-autosubmit");
+            $el.find("input").off(".pat-autosubmit");
+        },
+        considerSubmit: function(ev) {
+            // XXX: check that the very same event did not submit the
+            // form already (see below)
+
             var $el = $(this),
-                $form = $el.is('form') ? $el : $el.parents('form').first();
+                $form = $el.is("form") ? $el : $el.parents("form").first();
 
             // ignore auto-suggest fields, the change event will be
             // triggered on the hidden input
-            if ($el.is('.pat-autosuggest')) {
-                log.debug('ignored event from autosuggest field');
+            if ($el.is(".pat-autosuggest")) {
+                log.debug("ignored event from autosuggest field");
                 return;
             }
 
-            if ($el.is('input[type=search]')) {
+            if ($el.is("input[type=search]")) {
                 // clicking X on type=search deletes data attrs,
                 // therefore we store the old value on the form.
-                var name = $el.attr('name'),
-                    key = name + '-autosubmit-oldvalue',
+                var name = $el.attr("name"),
+                    key = "pat-autosubmit-" + name + "-oldvalue",
                     oldvalue = $form.data(key) || "",
                     curvalue = $el[0].value || "";
 
-                if (!name) {
-                    log.warn('type=search without name, will be a problem' +
-                             ' if there are multiple', $el);
-                }
-                if (oldvalue === curvalue) return;
+                if (!name)
+                    log.warn("type=search without name, will be a problem" +
+                             " if there are multiple", $el);
+
+                if (oldvalue === curvalue)
+                    return;
 
                 $form.data(key, curvalue);
             }
 
             log.debug("triggered by " + ev.type);
+
+            // XXX: mark event as used so we won't submit through a
+            // parent element again.
 
             $form.submit();
         }
@@ -20177,89 +16897,1189 @@ define('patterns/autosubmit2',[
 
 define("jquery_autosuggest", ["jquery"], function(){});
 
+/*!
+ * jQuery Form Plugin
+ * version: 3.18 (28-SEP-2012)
+ * @requires jQuery v1.5 or later
+ *
+ * Examples and documentation at: http://malsup.com/jquery/form/
+ * Project repository: https://github.com/malsup/form
+ * Dual licensed under the MIT and GPL licenses:
+ *    http://malsup.github.com/mit-license.txt
+ *    http://malsup.github.com/gpl-license-v2.txt
+ */
+/*global ActiveXObject alert */
+;(function($) {
+
+
+/*
+    Usage Note:
+    -----------
+    Do not use both ajaxSubmit and ajaxForm on the same form.  These
+    functions are mutually exclusive.  Use ajaxSubmit if you want
+    to bind your own submit handler to the form.  For example,
+
+    $(document).ready(function() {
+        $('#myForm').on('submit', function(e) {
+            e.preventDefault(); // <-- important
+            $(this).ajaxSubmit({
+                target: '#output'
+            });
+        });
+    });
+
+    Use ajaxForm when you want the plugin to manage all the event binding
+    for you.  For example,
+
+    $(document).ready(function() {
+        $('#myForm').ajaxForm({
+            target: '#output'
+        });
+    });
+    
+    You can also use ajaxForm with delegation (requires jQuery v1.7+), so the
+    form does not have to exist when you invoke ajaxForm:
+
+    $('#myForm').ajaxForm({
+        delegation: true,
+        target: '#output'
+    });
+    
+    When using ajaxForm, the ajaxSubmit function will be invoked for you
+    at the appropriate time.
+*/
+
+/**
+ * Feature detection
+ */
+var feature = {};
+feature.fileapi = $("<input type='file'/>").get(0).files !== undefined;
+feature.formdata = window.FormData !== undefined;
+
+/**
+ * ajaxSubmit() provides a mechanism for immediately submitting
+ * an HTML form using AJAX.
+ */
+$.fn.ajaxSubmit = function(options) {
+    /*jshint scripturl:true */
+
+    // fast fail if nothing selected (http://dev.jquery.com/ticket/2752)
+    if (!this.length) {
+        log('ajaxSubmit: skipping submit process - no element selected');
+        return this;
+    }
+    
+    var method, action, url, $form = this;
+
+    if (typeof options == 'function') {
+        options = { success: options };
+    }
+
+    method = this.attr('method');
+    action = this.attr('action');
+    url = (typeof action === 'string') ? $.trim(action) : '';
+    url = url || window.location.href || '';
+    if (url) {
+        // clean url (don't include hash vaue)
+        url = (url.match(/^([^#]+)/)||[])[1];
+    }
+
+    options = $.extend(true, {
+        url:  url,
+        success: $.ajaxSettings.success,
+        type: method || 'GET',
+        iframeSrc: /^https/i.test(window.location.href || '') ? 'javascript:false' : 'about:blank'
+    }, options);
+
+    // hook for manipulating the form data before it is extracted;
+    // convenient for use with rich editors like tinyMCE or FCKEditor
+    var veto = {};
+    this.trigger('form-pre-serialize', [this, options, veto]);
+    if (veto.veto) {
+        log('ajaxSubmit: submit vetoed via form-pre-serialize trigger');
+        return this;
+    }
+
+    // provide opportunity to alter form data before it is serialized
+    if (options.beforeSerialize && options.beforeSerialize(this, options) === false) {
+        log('ajaxSubmit: submit aborted via beforeSerialize callback');
+        return this;
+    }
+
+    var traditional = options.traditional;
+    if ( traditional === undefined ) {
+        traditional = $.ajaxSettings.traditional;
+    }
+    
+    var elements = [];
+    var qx, a = this.formToArray(options.semantic, elements);
+    if (options.data) {
+        options.extraData = options.data;
+        qx = $.param(options.data, traditional);
+    }
+
+    // give pre-submit callback an opportunity to abort the submit
+    if (options.beforeSubmit && options.beforeSubmit(a, this, options) === false) {
+        log('ajaxSubmit: submit aborted via beforeSubmit callback');
+        return this;
+    }
+
+    // fire vetoable 'validate' event
+    this.trigger('form-submit-validate', [a, this, options, veto]);
+    if (veto.veto) {
+        log('ajaxSubmit: submit vetoed via form-submit-validate trigger');
+        return this;
+    }
+
+    var q = $.param(a, traditional);
+    if (qx) {
+        q = ( q ? (q + '&' + qx) : qx );
+    }    
+    if (options.type.toUpperCase() == 'GET') {
+        options.url += (options.url.indexOf('?') >= 0 ? '&' : '?') + q;
+        options.data = null;  // data is null for 'get'
+    }
+    else {
+        options.data = q; // data is the query string for 'post'
+    }
+
+    var callbacks = [];
+    if (options.resetForm) {
+        callbacks.push(function() { $form.resetForm(); });
+    }
+    if (options.clearForm) {
+        callbacks.push(function() { $form.clearForm(options.includeHidden); });
+    }
+
+    // perform a load on the target only if dataType is not provided
+    if (!options.dataType && options.target) {
+        var oldSuccess = options.success || function(){};
+        callbacks.push(function(data) {
+            var fn = options.replaceTarget ? 'replaceWith' : 'html';
+            $(options.target)[fn](data).each(oldSuccess, arguments);
+        });
+    }
+    else if (options.success) {
+        callbacks.push(options.success);
+    }
+
+    options.success = function(data, status, xhr) { // jQuery 1.4+ passes xhr as 3rd arg
+        var context = options.context || this ;    // jQuery 1.4+ supports scope context 
+        for (var i=0, max=callbacks.length; i < max; i++) {
+            callbacks[i].apply(context, [data, status, xhr || $form, $form]);
+        }
+    };
+
+    // are there files to upload?
+    var fileInputs = $('input:file:enabled[value]', this); // [value] (issue #113)
+    var hasFileInputs = fileInputs.length > 0;
+    var mp = 'multipart/form-data';
+    var multipart = ($form.attr('enctype') == mp || $form.attr('encoding') == mp);
+
+    var fileAPI = feature.fileapi && feature.formdata;
+    log("fileAPI :" + fileAPI);
+    var shouldUseFrame = (hasFileInputs || multipart) && !fileAPI;
+
+    var jqxhr;
+
+    // options.iframe allows user to force iframe mode
+    // 06-NOV-09: now defaulting to iframe mode if file input is detected
+    if (options.iframe !== false && (options.iframe || shouldUseFrame)) {
+        // hack to fix Safari hang (thanks to Tim Molendijk for this)
+        // see:  http://groups.google.com/group/jquery-dev/browse_thread/thread/36395b7ab510dd5d
+        if (options.closeKeepAlive) {
+            $.get(options.closeKeepAlive, function() {
+                jqxhr = fileUploadIframe(a);
+            });
+        }
+        else {
+            jqxhr = fileUploadIframe(a);
+        }
+    }
+    else if ((hasFileInputs || multipart) && fileAPI) {
+        jqxhr = fileUploadXhr(a);
+    }
+    else {
+        jqxhr = $.ajax(options);
+    }
+
+    $form.removeData('jqxhr').data('jqxhr', jqxhr);
+
+    // clear element array
+    for (var k=0; k < elements.length; k++)
+        elements[k] = null;
+
+    // fire 'notify' event
+    this.trigger('form-submit-notify', [this, options]);
+    return this;
+
+    // utility fn for deep serialization
+    function deepSerialize(extraData){
+        var serialized = $.param(extraData).split('&');
+        var len = serialized.length;
+        var result = {};
+        var i, part;
+        for (i=0; i < len; i++) {
+            part = serialized[i].split('=');
+            result[decodeURIComponent(part[0])] = decodeURIComponent(part[1]);
+        }
+        return result;
+    }
+
+     // XMLHttpRequest Level 2 file uploads (big hat tip to francois2metz)
+    function fileUploadXhr(a) {
+        var formdata = new FormData();
+
+        for (var i=0; i < a.length; i++) {
+            formdata.append(a[i].name, a[i].value);
+        }
+
+        if (options.extraData) {
+            var serializedData = deepSerialize(options.extraData);
+            for (var p in serializedData)
+                if (serializedData.hasOwnProperty(p))
+                    formdata.append(p, serializedData[p]);
+        }
+
+        options.data = null;
+
+        var s = $.extend(true, {}, $.ajaxSettings, options, {
+            contentType: false,
+            processData: false,
+            cache: false,
+            type: method || 'POST'
+        });
+        
+        if (options.uploadProgress) {
+            // workaround because jqXHR does not expose upload property
+            s.xhr = function() {
+                var xhr = jQuery.ajaxSettings.xhr();
+                if (xhr.upload) {
+                    xhr.upload.onprogress = function(event) {
+                        var percent = 0;
+                        var position = event.loaded || event.position; /*event.position is deprecated*/
+                        var total = event.total;
+                        if (event.lengthComputable) {
+                            percent = Math.ceil(position / total * 100);
+                        }
+                        options.uploadProgress(event, position, total, percent);
+                    };
+                }
+                return xhr;
+            };
+        }
+
+        s.data = null;
+            var beforeSend = s.beforeSend;
+            s.beforeSend = function(xhr, o) {
+                o.data = formdata;
+                if(beforeSend)
+                    beforeSend.call(this, xhr, o);
+        };
+        return $.ajax(s);
+    }
+
+    // private function for handling file uploads (hat tip to YAHOO!)
+    function fileUploadIframe(a) {
+        var form = $form[0], el, i, s, g, id, $io, io, xhr, sub, n, timedOut, timeoutHandle;
+        var useProp = !!$.fn.prop;
+        var deferred = $.Deferred();
+        var submitMethod,
+            $idSubmit = $(':input[id=submit]', form),
+            $nameSubmit = $(':input[name=submit]', form);
+
+        // if there is an input with a name or id of 'submit' then we won't be
+        // able to invoke the submit fn on the form (at least not x-browser).
+        // We temporarily rename, fetch the submit method and rename back.
+        $idSubmit.attr({id: 'submit_temporarily_renamed'});
+        $nameSubmit.attr({name: 'submit_temporarily_renamed'});
+        submitMethod = form.submit;
+        $idSubmit.attr({id: 'submit'});
+        $nameSubmit.attr({name: 'submit'});
+
+        if (a) {
+            // ensure that every serialized input is still enabled
+            for (i=0; i < elements.length; i++) {
+                el = $(elements[i]);
+                if ( useProp )
+                    el.prop('disabled', false);
+                else
+                    el.removeAttr('disabled');
+            }
+        }
+
+        s = $.extend(true, {}, $.ajaxSettings, options);
+        s.context = s.context || s;
+        id = 'jqFormIO' + (new Date().getTime());
+        if (s.iframeTarget) {
+            $io = $(s.iframeTarget);
+            n = $io.attr('name');
+            if (!n)
+                 $io.attr('name', id);
+            else
+                id = n;
+        }
+        else {
+            $io = $('<iframe name="' + id + '" src="'+ s.iframeSrc +'" />');
+            $io.css({ position: 'absolute', top: '-1000px', left: '-1000px' });
+        }
+        io = $io[0];
+
+
+        xhr = { // mock object
+            aborted: 0,
+            responseText: null,
+            responseXML: null,
+            status: 0,
+            statusText: 'n/a',
+            getAllResponseHeaders: function() {},
+            getResponseHeader: function() {},
+            setRequestHeader: function() {},
+            abort: function(status) {
+                var e = (status === 'timeout' ? 'timeout' : 'aborted');
+                log('aborting upload... ' + e);
+                this.aborted = 1;
+                // #214
+                if (io.contentWindow.document.execCommand) {
+                    try { // #214
+                        io.contentWindow.document.execCommand('Stop');
+                    } catch(ignore) {}
+                }
+                $io.attr('src', s.iframeSrc); // abort op in progress
+                xhr.error = e;
+                if (s.error)
+                    s.error.call(s.context, xhr, e, status);
+                if (g)
+                    $.event.trigger("ajaxError", [xhr, s, e]);
+                if (s.complete)
+                    s.complete.call(s.context, xhr, e);
+            }
+        };
+
+        g = s.global;
+        // trigger ajax global events so that activity/block indicators work like normal
+        if (g && 0 === $.active++) {
+            $.event.trigger("ajaxStart");
+        }
+        if (g) {
+            $.event.trigger("ajaxSend", [xhr, s]);
+        }
+
+        if (s.beforeSend && s.beforeSend.call(s.context, xhr, s) === false) {
+            if (s.global) {
+                $.active--;
+            }
+            deferred.reject();
+            return deferred;
+        }
+        if (xhr.aborted) {
+            deferred.reject();
+            return deferred;
+        }
+
+        // add submitting element to data if we know it
+        sub = form.clk;
+        if (sub) {
+            n = sub.name;
+            if (n && !sub.disabled) {
+                s.extraData = s.extraData || {};
+                s.extraData[n] = sub.value;
+                if (sub.type == "image") {
+                    s.extraData[n+'.x'] = form.clk_x;
+                    s.extraData[n+'.y'] = form.clk_y;
+                }
+            }
+        }
+        
+        var CLIENT_TIMEOUT_ABORT = 1;
+        var SERVER_ABORT = 2;
+
+        function getDoc(frame) {
+            var doc = frame.contentWindow ? frame.contentWindow.document : frame.contentDocument ? frame.contentDocument : frame.document;
+            return doc;
+        }
+        
+        // Rails CSRF hack (thanks to Yvan Barthelemy)
+        var csrf_token = $('meta[name=csrf-token]').attr('content');
+        var csrf_param = $('meta[name=csrf-param]').attr('content');
+        if (csrf_param && csrf_token) {
+            s.extraData = s.extraData || {};
+            s.extraData[csrf_param] = csrf_token;
+        }
+
+        // take a breath so that pending repaints get some cpu time before the upload starts
+        function doSubmit() {
+            // make sure form attrs are set
+            var t = $form.attr('target'), a = $form.attr('action');
+
+            // update form attrs in IE friendly way
+            form.setAttribute('target',id);
+            if (!method) {
+                form.setAttribute('method', 'POST');
+            }
+            if (a != s.url) {
+                form.setAttribute('action', s.url);
+            }
+
+            // ie borks in some cases when setting encoding
+            if (! s.skipEncodingOverride && (!method || /post/i.test(method))) {
+                $form.attr({
+                    encoding: 'multipart/form-data',
+                    enctype:  'multipart/form-data'
+                });
+            }
+
+            // support timout
+            if (s.timeout) {
+                timeoutHandle = setTimeout(function() { timedOut = true; cb(CLIENT_TIMEOUT_ABORT); }, s.timeout);
+            }
+            
+            // look for server aborts
+            function checkState() {
+                try {
+                    var state = getDoc(io).readyState;
+                    log('state = ' + state);
+                    if (state && state.toLowerCase() == 'uninitialized')
+                        setTimeout(checkState,50);
+                }
+                catch(e) {
+                    log('Server abort: ' , e, ' (', e.name, ')');
+                    cb(SERVER_ABORT);
+                    if (timeoutHandle)
+                        clearTimeout(timeoutHandle);
+                    timeoutHandle = undefined;
+                }
+            }
+
+            // add "extra" data to form if provided in options
+            var extraInputs = [];
+            try {
+                if (s.extraData) {
+                    for (var n in s.extraData) {
+                        if (s.extraData.hasOwnProperty(n)) {
+                           // if using the $.param format that allows for multiple values with the same name
+                           if($.isPlainObject(s.extraData[n]) && s.extraData[n].hasOwnProperty('name') && s.extraData[n].hasOwnProperty('value')) {
+                               extraInputs.push(
+                               $('<input type="hidden" name="'+s.extraData[n].name+'">').attr('value',s.extraData[n].value)
+                                   .appendTo(form)[0]);
+                           } else {
+                               extraInputs.push(
+                               $('<input type="hidden" name="'+n+'">').attr('value',s.extraData[n])
+                                   .appendTo(form)[0]);
+                           }
+                        }
+                    }
+                }
+
+                if (!s.iframeTarget) {
+                    // add iframe to doc and submit the form
+                    $io.appendTo('body');
+                    if (io.attachEvent)
+                        io.attachEvent('onload', cb);
+                    else
+                        io.addEventListener('load', cb, false);
+                }
+                setTimeout(checkState,15);
+                submitMethod.call(form);
+            }
+            finally {
+                // reset attrs and remove "extra" input elements
+                form.setAttribute('action',a);
+                if(t) {
+                    form.setAttribute('target', t);
+                } else {
+                    $form.removeAttr('target');
+                }
+                $(extraInputs).remove();
+            }
+        }
+
+        if (s.forceSync) {
+            doSubmit();
+        }
+        else {
+            setTimeout(doSubmit, 10); // this lets dom updates render
+        }
+
+        var data, doc, domCheckCount = 50, callbackProcessed;
+
+        function cb(e) {
+            if (xhr.aborted || callbackProcessed) {
+                return;
+            }
+            try {
+                doc = getDoc(io);
+            }
+            catch(ex) {
+                log('cannot access response document: ', ex);
+                e = SERVER_ABORT;
+            }
+            if (e === CLIENT_TIMEOUT_ABORT && xhr) {
+                xhr.abort('timeout');
+                deferred.reject(xhr, 'timeout');
+                return;
+            }
+            else if (e == SERVER_ABORT && xhr) {
+                xhr.abort('server abort');
+                deferred.reject(xhr, 'error', 'server abort');
+                return;
+            }
+
+            if (!doc || doc.location.href == s.iframeSrc) {
+                // response not received yet
+                if (!timedOut)
+                    return;
+            }
+            if (io.detachEvent)
+                io.detachEvent('onload', cb);
+            else    
+                io.removeEventListener('load', cb, false);
+
+            var status = 'success', errMsg;
+            try {
+                if (timedOut) {
+                    throw 'timeout';
+                }
+
+                var isXml = s.dataType == 'xml' || doc.XMLDocument || $.isXMLDoc(doc);
+                log('isXml='+isXml);
+                if (!isXml && window.opera && (doc.body === null || !doc.body.innerHTML)) {
+                    if (--domCheckCount) {
+                        // in some browsers (Opera) the iframe DOM is not always traversable when
+                        // the onload callback fires, so we loop a bit to accommodate
+                        log('requeing onLoad callback, DOM not available');
+                        setTimeout(cb, 250);
+                        return;
+                    }
+                    // let this fall through because server response could be an empty document
+                    //log('Could not access iframe DOM after mutiple tries.');
+                    //throw 'DOMException: not available';
+                }
+
+                //log('response detected');
+                var docRoot = doc.body ? doc.body : doc.documentElement;
+                xhr.responseText = docRoot ? docRoot.innerHTML : null;
+                xhr.responseXML = doc.XMLDocument ? doc.XMLDocument : doc;
+                if (isXml)
+                    s.dataType = 'xml';
+                xhr.getResponseHeader = function(header){
+                    var headers = {'content-type': s.dataType};
+                    return headers[header];
+                };
+                // support for XHR 'status' & 'statusText' emulation :
+                if (docRoot) {
+                    xhr.status = Number( docRoot.getAttribute('status') ) || xhr.status;
+                    xhr.statusText = docRoot.getAttribute('statusText') || xhr.statusText;
+                }
+
+                var dt = (s.dataType || '').toLowerCase();
+                var scr = /(json|script|text)/.test(dt);
+                if (scr || s.textarea) {
+                    // see if user embedded response in textarea
+                    var ta = doc.getElementsByTagName('textarea')[0];
+                    if (ta) {
+                        xhr.responseText = ta.value;
+                        // support for XHR 'status' & 'statusText' emulation :
+                        xhr.status = Number( ta.getAttribute('status') ) || xhr.status;
+                        xhr.statusText = ta.getAttribute('statusText') || xhr.statusText;
+                    }
+                    else if (scr) {
+                        // account for browsers injecting pre around json response
+                        var pre = doc.getElementsByTagName('pre')[0];
+                        var b = doc.getElementsByTagName('body')[0];
+                        if (pre) {
+                            xhr.responseText = pre.textContent ? pre.textContent : pre.innerText;
+                        }
+                        else if (b) {
+                            xhr.responseText = b.textContent ? b.textContent : b.innerText;
+                        }
+                    }
+                }
+                else if (dt == 'xml' && !xhr.responseXML && xhr.responseText) {
+                    xhr.responseXML = toXml(xhr.responseText);
+                }
+
+                try {
+                    data = httpData(xhr, dt, s);
+                }
+                catch (e) {
+                    status = 'parsererror';
+                    xhr.error = errMsg = (e || status);
+                }
+            }
+            catch (e) {
+                log('error caught: ',e);
+                status = 'error';
+                xhr.error = errMsg = (e || status);
+            }
+
+            if (xhr.aborted) {
+                log('upload aborted');
+                status = null;
+            }
+
+            if (xhr.status) { // we've set xhr.status
+                status = (xhr.status >= 200 && xhr.status < 300 || xhr.status === 304) ? 'success' : 'error';
+            }
+
+            // ordering of these callbacks/triggers is odd, but that's how $.ajax does it
+            if (status === 'success') {
+                if (s.success)
+                    s.success.call(s.context, data, 'success', xhr);
+                deferred.resolve(xhr.responseText, 'success', xhr);
+                if (g)
+                    $.event.trigger("ajaxSuccess", [xhr, s]);
+            }
+            else if (status) {
+                if (errMsg === undefined)
+                    errMsg = xhr.statusText;
+                if (s.error)
+                    s.error.call(s.context, xhr, status, errMsg);
+                deferred.reject(xhr, 'error', errMsg);
+                if (g)
+                    $.event.trigger("ajaxError", [xhr, s, errMsg]);
+            }
+
+            if (g)
+                $.event.trigger("ajaxComplete", [xhr, s]);
+
+            if (g && ! --$.active) {
+                $.event.trigger("ajaxStop");
+            }
+
+            if (s.complete)
+                s.complete.call(s.context, xhr, status);
+
+            callbackProcessed = true;
+            if (s.timeout)
+                clearTimeout(timeoutHandle);
+
+            // clean up
+            setTimeout(function() {
+                if (!s.iframeTarget)
+                    $io.remove();
+                xhr.responseXML = null;
+            }, 100);
+        }
+
+        var toXml = $.parseXML || function(s, doc) { // use parseXML if available (jQuery 1.5+)
+            if (window.ActiveXObject) {
+                doc = new ActiveXObject('Microsoft.XMLDOM');
+                doc.async = 'false';
+                doc.loadXML(s);
+            }
+            else {
+                doc = (new DOMParser()).parseFromString(s, 'text/xml');
+            }
+            return (doc && doc.documentElement && doc.documentElement.nodeName != 'parsererror') ? doc : null;
+        };
+        var parseJSON = $.parseJSON || function(s) {
+            /*jslint evil:true */
+            return window['eval']('(' + s + ')');
+        };
+
+        var httpData = function( xhr, type, s ) { // mostly lifted from jq1.4.4
+
+            var ct = xhr.getResponseHeader('content-type') || '',
+                xml = type === 'xml' || !type && ct.indexOf('xml') >= 0,
+                data = xml ? xhr.responseXML : xhr.responseText;
+
+            if (xml && data.documentElement.nodeName === 'parsererror') {
+                if ($.error)
+                    $.error('parsererror');
+            }
+            if (s && s.dataFilter) {
+                data = s.dataFilter(data, type);
+            }
+            if (typeof data === 'string') {
+                if (type === 'json' || !type && ct.indexOf('json') >= 0) {
+                    data = parseJSON(data);
+                } else if (type === "script" || !type && ct.indexOf("javascript") >= 0) {
+                    $.globalEval(data);
+                }
+            }
+            return data;
+        };
+
+        return deferred;
+    }
+};
+
+/**
+ * ajaxForm() provides a mechanism for fully automating form submission.
+ *
+ * The advantages of using this method instead of ajaxSubmit() are:
+ *
+ * 1: This method will include coordinates for <input type="image" /> elements (if the element
+ *    is used to submit the form).
+ * 2. This method will include the submit element's name/value data (for the element that was
+ *    used to submit the form).
+ * 3. This method binds the submit() method to the form for you.
+ *
+ * The options argument for ajaxForm works exactly as it does for ajaxSubmit.  ajaxForm merely
+ * passes the options argument along after properly binding events for submit elements and
+ * the form itself.
+ */
+$.fn.ajaxForm = function(options) {
+    options = options || {};
+    options.delegation = options.delegation && $.isFunction($.fn.on);
+    
+    // in jQuery 1.3+ we can fix mistakes with the ready state
+    if (!options.delegation && this.length === 0) {
+        var o = { s: this.selector, c: this.context };
+        if (!$.isReady && o.s) {
+            log('DOM not ready, queuing ajaxForm');
+            $(function() {
+                $(o.s,o.c).ajaxForm(options);
+            });
+            return this;
+        }
+        // is your DOM ready?  http://docs.jquery.com/Tutorials:Introducing_$(document).ready()
+        log('terminating; zero elements found by selector' + ($.isReady ? '' : ' (DOM not ready)'));
+        return this;
+    }
+
+    if ( options.delegation ) {
+        $(document)
+            .off('submit.form-plugin', this.selector, doAjaxSubmit)
+            .off('click.form-plugin', this.selector, captureSubmittingElement)
+            .on('submit.form-plugin', this.selector, options, doAjaxSubmit)
+            .on('click.form-plugin', this.selector, options, captureSubmittingElement);
+        return this;
+    }
+
+    return this.ajaxFormUnbind()
+        .bind('submit.form-plugin', options, doAjaxSubmit)
+        .bind('click.form-plugin', options, captureSubmittingElement);
+};
+
+// private event handlers    
+function doAjaxSubmit(e) {
+    /*jshint validthis:true */
+    var options = e.data;
+    if (!e.isDefaultPrevented()) { // if event has been canceled, don't proceed
+        e.preventDefault();
+        $(this).ajaxSubmit(options);
+    }
+}
+    
+function captureSubmittingElement(e) {
+    /*jshint validthis:true */
+    var target = e.target;
+    var $el = $(target);
+    if (!($el.is(":submit,input:image"))) {
+        // is this a child element of the submit el?  (ex: a span within a button)
+        var t = $el.closest(':submit');
+        if (t.length === 0) {
+            return;
+        }
+        target = t[0];
+    }
+    var form = this;
+    form.clk = target;
+    if (target.type == 'image') {
+        if (e.offsetX !== undefined) {
+            form.clk_x = e.offsetX;
+            form.clk_y = e.offsetY;
+        } else if (typeof $.fn.offset == 'function') {
+            var offset = $el.offset();
+            form.clk_x = e.pageX - offset.left;
+            form.clk_y = e.pageY - offset.top;
+        } else {
+            form.clk_x = e.pageX - target.offsetLeft;
+            form.clk_y = e.pageY - target.offsetTop;
+        }
+    }
+    // clear form vars
+    setTimeout(function() { form.clk = form.clk_x = form.clk_y = null; }, 100);
+}
+
+
+// ajaxFormUnbind unbinds the event handlers that were bound by ajaxForm
+$.fn.ajaxFormUnbind = function() {
+    return this.unbind('submit.form-plugin click.form-plugin');
+};
+
+/**
+ * formToArray() gathers form element data into an array of objects that can
+ * be passed to any of the following ajax functions: $.get, $.post, or load.
+ * Each object in the array has both a 'name' and 'value' property.  An example of
+ * an array for a simple login form might be:
+ *
+ * [ { name: 'username', value: 'jresig' }, { name: 'password', value: 'secret' } ]
+ *
+ * It is this array that is passed to pre-submit callback functions provided to the
+ * ajaxSubmit() and ajaxForm() methods.
+ */
+$.fn.formToArray = function(semantic, elements) {
+    var a = [];
+    if (this.length === 0) {
+        return a;
+    }
+
+    var form = this[0];
+    var els = semantic ? form.getElementsByTagName('*') : form.elements;
+    if (!els) {
+        return a;
+    }
+
+    var i,j,n,v,el,max,jmax;
+    for(i=0, max=els.length; i < max; i++) {
+        el = els[i];
+        n = el.name;
+        if (!n) {
+            continue;
+        }
+
+        if (semantic && form.clk && el.type == "image") {
+            // handle image inputs on the fly when semantic == true
+            if(!el.disabled && form.clk == el) {
+                a.push({name: n, value: $(el).val(), type: el.type });
+                a.push({name: n+'.x', value: form.clk_x}, {name: n+'.y', value: form.clk_y});
+            }
+            continue;
+        }
+
+        v = $.fieldValue(el, true);
+        if (v && v.constructor == Array) {
+            if (elements) 
+                elements.push(el);
+            for(j=0, jmax=v.length; j < jmax; j++) {
+                a.push({name: n, value: v[j]});
+            }
+        }
+        else if (feature.fileapi && el.type == 'file' && !el.disabled) {
+            if (elements) 
+                elements.push(el);
+            var files = el.files;
+            if (files.length) {
+                for (j=0; j < files.length; j++) {
+                    a.push({name: n, value: files[j], type: el.type});
+                }
+            }
+            else {
+                // #180
+                a.push({ name: n, value: '', type: el.type });
+            }
+        }
+        else if (v !== null && typeof v != 'undefined') {
+            if (elements) 
+                elements.push(el);
+            a.push({name: n, value: v, type: el.type, required: el.required});
+        }
+    }
+
+    if (!semantic && form.clk) {
+        // input type=='image' are not found in elements array! handle it here
+        var $input = $(form.clk), input = $input[0];
+        n = input.name;
+        if (n && !input.disabled && input.type == 'image') {
+            a.push({name: n, value: $input.val()});
+            a.push({name: n+'.x', value: form.clk_x}, {name: n+'.y', value: form.clk_y});
+        }
+    }
+    return a;
+};
+
+/**
+ * Serializes form data into a 'submittable' string. This method will return a string
+ * in the format: name1=value1&amp;name2=value2
+ */
+$.fn.formSerialize = function(semantic) {
+    //hand off to jQuery.param for proper encoding
+    return $.param(this.formToArray(semantic));
+};
+
+/**
+ * Serializes all field elements in the jQuery object into a query string.
+ * This method will return a string in the format: name1=value1&amp;name2=value2
+ */
+$.fn.fieldSerialize = function(successful) {
+    var a = [];
+    this.each(function() {
+        var n = this.name;
+        if (!n) {
+            return;
+        }
+        var v = $.fieldValue(this, successful);
+        if (v && v.constructor == Array) {
+            for (var i=0,max=v.length; i < max; i++) {
+                a.push({name: n, value: v[i]});
+            }
+        }
+        else if (v !== null && typeof v != 'undefined') {
+            a.push({name: this.name, value: v});
+        }
+    });
+    //hand off to jQuery.param for proper encoding
+    return $.param(a);
+};
+
+/**
+ * Returns the value(s) of the element in the matched set.  For example, consider the following form:
+ *
+ *  <form><fieldset>
+ *      <input name="A" type="text" />
+ *      <input name="A" type="text" />
+ *      <input name="B" type="checkbox" value="B1" />
+ *      <input name="B" type="checkbox" value="B2"/>
+ *      <input name="C" type="radio" value="C1" />
+ *      <input name="C" type="radio" value="C2" />
+ *  </fieldset></form>
+ *
+ *  var v = $(':text').fieldValue();
+ *  // if no values are entered into the text inputs
+ *  v == ['','']
+ *  // if values entered into the text inputs are 'foo' and 'bar'
+ *  v == ['foo','bar']
+ *
+ *  var v = $(':checkbox').fieldValue();
+ *  // if neither checkbox is checked
+ *  v === undefined
+ *  // if both checkboxes are checked
+ *  v == ['B1', 'B2']
+ *
+ *  var v = $(':radio').fieldValue();
+ *  // if neither radio is checked
+ *  v === undefined
+ *  // if first radio is checked
+ *  v == ['C1']
+ *
+ * The successful argument controls whether or not the field element must be 'successful'
+ * (per http://www.w3.org/TR/html4/interact/forms.html#successful-controls).
+ * The default value of the successful argument is true.  If this value is false the value(s)
+ * for each element is returned.
+ *
+ * Note: This method *always* returns an array.  If no valid value can be determined the
+ *    array will be empty, otherwise it will contain one or more values.
+ */
+$.fn.fieldValue = function(successful) {
+    for (var val=[], i=0, max=this.length; i < max; i++) {
+        var el = this[i];
+        var v = $.fieldValue(el, successful);
+        if (v === null || typeof v == 'undefined' || (v.constructor == Array && !v.length)) {
+            continue;
+        }
+        if (v.constructor == Array)
+            $.merge(val, v);
+        else
+            val.push(v);
+    }
+    return val;
+};
+
+/**
+ * Returns the value of the field element.
+ */
+$.fieldValue = function(el, successful) {
+    var n = el.name, t = el.type, tag = el.tagName.toLowerCase();
+    if (successful === undefined) {
+        successful = true;
+    }
+
+    if (successful && (!n || el.disabled || t == 'reset' || t == 'button' ||
+        (t == 'checkbox' || t == 'radio') && !el.checked ||
+        (t == 'submit' || t == 'image') && el.form && el.form.clk != el ||
+        tag == 'select' && el.selectedIndex == -1)) {
+            return null;
+    }
+
+    if (tag == 'select') {
+        var index = el.selectedIndex;
+        if (index < 0) {
+            return null;
+        }
+        var a = [], ops = el.options;
+        var one = (t == 'select-one');
+        var max = (one ? index+1 : ops.length);
+        for(var i=(one ? index : 0); i < max; i++) {
+            var op = ops[i];
+            if (op.selected) {
+                var v = op.value;
+                if (!v) { // extra pain for IE...
+                    v = (op.attributes && op.attributes['value'] && !(op.attributes['value'].specified)) ? op.text : op.value;
+                }
+                if (one) {
+                    return v;
+                }
+                a.push(v);
+            }
+        }
+        return a;
+    }
+    return $(el).val();
+};
+
+/**
+ * Clears the form data.  Takes the following actions on the form's input fields:
+ *  - input text fields will have their 'value' property set to the empty string
+ *  - select elements will have their 'selectedIndex' property set to -1
+ *  - checkbox and radio inputs will have their 'checked' property set to false
+ *  - inputs of type submit, button, reset, and hidden will *not* be effected
+ *  - button elements will *not* be effected
+ */
+$.fn.clearForm = function(includeHidden) {
+    return this.each(function() {
+        $('input,select,textarea', this).clearFields(includeHidden);
+    });
+};
+
+/**
+ * Clears the selected form elements.
+ */
+$.fn.clearFields = $.fn.clearInputs = function(includeHidden) {
+    var re = /^(?:color|date|datetime|email|month|number|password|range|search|tel|text|time|url|week)$/i; // 'hidden' is not in this list
+    return this.each(function() {
+        var t = this.type, tag = this.tagName.toLowerCase();
+        if (re.test(t) || tag == 'textarea') {
+            this.value = '';
+        }
+        else if (t == 'checkbox' || t == 'radio') {
+            this.checked = false;
+        }
+        else if (tag == 'select') {
+            this.selectedIndex = -1;
+        }
+        else if (includeHidden) {
+            // includeHidden can be the value true, or it can be a selector string
+            // indicating a special test; for example:
+            //  $('#myForm').clearForm('.special:hidden')
+            // the above would clean hidden inputs that have the class of 'special'
+            if ( (includeHidden === true && /hidden/.test(t)) ||
+                 (typeof includeHidden == 'string' && $(this).is(includeHidden)) )
+                this.value = '';
+        }
+    });
+};
+
+/**
+ * Resets the form data.  Causes all form elements to be reset to their original value.
+ */
+$.fn.resetForm = function() {
+    return this.each(function() {
+        // guard against an input with the name of 'reset'
+        // note that IE reports the reset function as an 'object'
+        if (typeof this.reset == 'function' || (typeof this.reset == 'object' && !this.reset.nodeType)) {
+            this.reset();
+        }
+    });
+};
+
+/**
+ * Enables or disables any matching elements.
+ */
+$.fn.enable = function(b) {
+    if (b === undefined) {
+        b = true;
+    }
+    return this.each(function() {
+        this.disabled = !b;
+    });
+};
+
+/**
+ * Checks/unchecks any matching checkboxes or radio buttons and
+ * selects/deselects and matching option elements.
+ */
+$.fn.selected = function(select) {
+    if (select === undefined) {
+        select = true;
+    }
+    return this.each(function() {
+        var t = this.type;
+        if (t == 'checkbox' || t == 'radio') {
+            this.checked = select;
+        }
+        else if (this.tagName.toLowerCase() == 'option') {
+            var $sel = $(this).parent('select');
+            if (select && $sel[0] && $sel[0].type == 'select-one') {
+                // deselect all other options
+                $sel.find('option').selected(false);
+            }
+            this.selected = select;
+        }
+    });
+};
+
+// expose debug var
+$.fn.ajaxSubmit.debug = false;
+
+// helper fn for console logging
+function log() {
+    if (!$.fn.ajaxSubmit.debug) 
+        return;
+    var msg = '[jquery.form] ' + Array.prototype.join.call(arguments,'');
+    if (window.console && window.console.log) {
+        window.console.log(msg);
+    }
+    else if (window.opera && window.opera.postError) {
+        window.opera.postError(msg);
+    }
+}
+
+})(jQuery);
+
+define("jquery_form", ["jquery"], function(){});
+
 // auto-suggest docs:
 // http://code.drewwilson.com/entry/autosuggest-jquery-plugin
 // Changes to previous
 // - prefill and ashtmlid in data-auto-suggest-config
 define('patterns/autosuggest',[
-    'jquery',
-    '../logging',
-    '../core/parser',
-    '../registry',
-    '../utils',
-    'jquery_autosuggest'
-], function($, logging, Parser, registry, utils) {
-    var log = logging.getLogger('autosuggest');
-
+    "jquery",
+    "../core/parser",
+    "../registry",
+    "jquery_autosuggest",
+    "jquery_form"
+], function($, Parser, registry) {
     var parser = new Parser("autosuggest");
-    parser.add_argument('words');
-    parser.add_argument('prefill');
-    parser.add_argument('as-html-id', false);
-    parser.add_argument('selected-value-prop', "name");
-    parser.add_argument('search-obj-prop', "name");
-    parser.add_argument('start-text', "Enter text");
+    parser.add_argument("words", "");
+    parser.add_argument("pre-fill");
+    parser.add_argument("as-html-id");
+    parser.add_argument("selected-value-prop", "name");
+    parser.add_argument("search-obj-prop", "name");
+    parser.add_argument("start-text", "Enter text");
 
     var _ = {
-        name: 'autosuggest',
+        name: "autosuggest",
         trigger: "input.pat-autosuggest",
         init: function($el, opts) {
-            if ($el.length > 1) {
-                return $el.map(function() {
-                    return _.init($(this), opts);
-                });
-            }
+            if ($el.length > 1)
+                return $el.each(function() { _.init($(this), opts); });
 
-            // fetch config from first parent found
-            cfg = _.parser.parse($el, opts);
-            if ($el.attr('readonly')) {
+            var cfg = _.parser.parse($el, opts);
+            if ($el.attr("readonly"))
                 cfg.startText = "";
-            }
 
-            if (cfg.prefill && (cfg.prefill.slice(0,1) === ',')) {
-                cfg.prefill = cfg.prefill.slice(1);
-            }
+            if (cfg.preFill && (cfg.preFill.slice(0,1) === ","))
+                cfg.preFill = cfg.preFill.slice(1);
 
-            $el.data("patterns.autosuggest", cfg);
-
-            $el.on('keydown.pat-autosuggest', _.onKeyDown);
-
-            // are we autosubmit?
-            var autosubmit = $el.is('.pat-autosubmit') ||
-                    ($el.parents('.pat-autosubmit').length > 0);
-            log.debug('autosubmit', autosubmit, $el);
-
-            var $form;
-            if (autosubmit) {
-                $form = $el.parents('form');
-                var submit_debounced = utils.debounce(function() {
-                    $form.submit();
-                }, 400);
-                cfg.selectionAdded = function($item) {
-                    log.debug('submit because selection was added', $item);
-                    // trigger the form
-                    submit_debounced();
-                };
-                cfg.selectionRemoved = function($item) {
-                    // ignore removal request if readonly
-                    if ($el.attr('readonly')) return;
-                    log.debug('submit because selection was removed', $item);
-                    // trigger the form
-                    $item.remove();
-                    submit_debounced();
-                };
-            }
+            $el.on("keydown.pat-autosuggest", _.onKeyDown);
 
             var data = cfg.words.split(/\s*,\s*/).map(function(word) {
                 return {value: word, name: word};
             });
 
+            cfg.selectionAdded = function() {
+                $el.next().trigger("change");
+            };
+            cfg.selectionRemoved = function(elem) {
+                elem.remove();
+                $el.next().trigger("change");
+            };
+
+            $el.on("change.pat-autosuggest", false);
+
+            // XXX: See https://github.com/Patternslib/Patterns/issues/149
+            if (cfg.asHtmlId !== undefined) {
+                cfg.asHtmlID = cfg.asHtmlId;
+            }
             $el.autoSuggest(data, cfg);
 
             return $el;
         },
         destroy: function($el) {
-            $el.off('.pat-autosuggest');
-            $el.data('patterns.autosuggest', null);
+            $el.off(".pat-autosuggest");
 
             // XXX: destroy the jqueryPlugin, unfortunately it doesn't
             // support this as of now
@@ -20270,11 +18090,11 @@ define('patterns/autosuggest',[
         onKeyDown: function(ev) {
             var $this = $(this);
             if (ev.which === 13) {
-                var $results = $this.parents('.as-selections').next();
+                var $results = $this.parents(".as-selections").next();
                 ev.preventDefault();
                 // skip ENTER->comma translation, if selection is active
-                if (($results.is(':visible')) &&
-                    ($results.find('.active').length > 0)) return;
+                if (($results.is(":visible")) &&
+                    ($results.find(".active").length > 0)) return;
                 var newev = $.Event("keydown");
                 newev.ctrlKey = false;
                 newev.which = 188;
@@ -20291,15 +18111,12 @@ define('patterns/autosuggest',[
 // vim: sw=4 expandtab
 ;
 define('patterns/breadcrumbs',[
-    'jquery',
-    '../logging',
-    '../registry'
-], function($, logging, registry) {
-    var log = logging.getLogger('breadcrumbs');
-
+    "jquery",
+    "../registry"
+], function($, registry) {
     var _ = {
         name: "breadcrumbs",
-        trigger: 'nav.pat-breadcrumbs',
+        trigger: "nav.pat-breadcrumbs",
         init: function($el, opts) {
             if ($el.length > 1) {
                 return $el.map(function() {
@@ -20309,7 +18126,7 @@ define('patterns/breadcrumbs',[
 
             // wrap elements in a DIV that will be shifted around
             var $content = $el.children()
-                    .wrapAll('<div class="pat-breadcrumbs-content"></div>').parent();
+                    .wrapAll("<div class='pat-breadcrumbs-content'></div>").parent();
 
             // set fixed width on content
             var width = $content.children().toArray().reduce(function(acc, el) {
@@ -20318,7 +18135,7 @@ define('patterns/breadcrumbs',[
             $content.width(width);
 
             // shift ctrl
-            var $ctrl = $('<span class="button shift">shift</span>')
+            var $ctrl = $("<span class='button shift'>shift</span>")
                     .prependTo($el);
 
             var shifted = false,
@@ -20330,7 +18147,7 @@ define('patterns/breadcrumbs',[
                     if (toggle) {
                         margin = shifted ? 0 : difference;
                         $content.animate({"margin-left": margin}, function() {
-                            $ctrl.toggleClass('shift-right shift-left');
+                            $ctrl.toggleClass("shift-right shift-left");
                             shifted = !shifted;
                         });
                     } else {
@@ -20348,10 +18165,10 @@ define('patterns/breadcrumbs',[
                     // we should be shifting
                     if (!shifting) {
                         shifting = true;
-                        $el.addClass('shifting');
-                        $ctrl.removeClass('shift-right');
-                        $ctrl.addClass('shift-left');
-                        $ctrl.on('click.pat-breadcrumbs', shifter(true));
+                        $el.addClass("shifting");
+                        $ctrl.removeClass("shift-right");
+                        $ctrl.addClass("shift-left");
+                        $ctrl.on("click.pat-breadcrumbs", shifter(true));
                         $ctrl.click();
                     } else {
                         // a shifter that keeps state
@@ -20363,20 +18180,137 @@ define('patterns/breadcrumbs',[
                         $content.animate({"margin-left": 0}, function() {
                             shifted = false;
                             shifting = false;
-                            $el.removeClass('shifting');
-                            $ctrl.removeClass('shift-left shift-right');
-                            $ctrl.off('.pat-breadcrumbs');
+                            $el.removeClass("shifting");
+                            $ctrl.removeClass("shift-left shift-right");
+                            $ctrl.off(".pat-breadcrumbs");
                         });
                     }
                 }
             };
             maybeshift();
-            $(window).on('resize.pat-breadcrumbs', maybeshift);
+            $(window).on("resize.pat-breadcrumbs", maybeshift);
 
             return $el;
         },
         destroy: function($el) {
-            $el.off('.pat-breadcrumbs');
+            $el.off(".pat-breadcrumbs");
+        }
+    };
+    registry.register(_);
+    return _;
+});
+
+// jshint indent: 4, browser: true, jquery: true, quotmark: double
+// vim: sw=4 expandtab
+;
+define('patterns/bumper',[
+    "jquery",
+    "../core/parser",
+    "../registry"
+], function($, Parser, registry) {
+    var parser = new Parser("bumper");
+
+    parser.add_argument("margin", 0);
+
+    var _ = {
+        name: "bumper",
+        trigger: ".pat-bumper",
+
+        init: function($el, options) {
+            // initialize the elements
+            $el.each(function() {
+                var $this = $(this),
+                    opts = parser.parse($this, options),
+                    data = _._getElementBox($this);
+                
+                data.threshold = {
+                    top:    data.top - opts.margin,
+                    bottom: data.bottom + opts.margin,
+                    left:   data.left - opts.margin,
+                    right:  data.right + opts.margin
+                };
+                data.margin = opts.margin;
+                
+                $this.data("patterns.bumper", data);
+            });
+
+            $(window).scroll(function() {
+                _._testBump($el, _._getViewport());
+            });
+
+            _._testBump($el, _._getViewport());
+        },
+        
+        /**
+         * Calculates the bounding box for the current viewport
+         */
+        _getViewport: function() {
+            var $win = $(window), view = {
+                top: $win.scrollTop(),
+                left: $win.scrollLeft()
+            };
+            
+            view.right = view.left + $win.width();
+            view.bottom = view.top + $win.height();
+            
+            return view;
+        },
+        
+        /**
+         * Calculates the bounding box for a given element, taking margins
+         * into consideration
+         *
+         * @param $elem The element
+         */
+        _getElementBox: function($elem) {
+            var box = $elem.offset();
+            
+            box.top -= parseFloat($elem.css("marginTop").replace(/auto/, 0));
+            box.left -= parseFloat($elem.css("marginLeft").replace(/auto/, 0));
+            box.right = box.left + $elem.outerWidth(true);
+            box.bottom = box.top + $elem.outerHeight(true);
+            
+            return box;
+        },
+
+        /**
+         * Determines whether an element should be bumped
+         *
+         * @param $el  The element to look for
+         * @param view The bounding box in which the element will be bumped
+         */
+        _testBump: function($el, box) {
+            $el.each(function() {
+                var $this = $(this),
+                    data = $this.data("patterns.bumper"),
+                    bumped = false;
+
+                if (box.top > data.threshold.top) {
+                    $this.addClass("bumped-top").removeClass("bumped-bottom");
+                    bumped = true;
+                } else if (box.bottom < data.threshold.bottom) {
+                    $this.addClass("bumped-bottom").removeClass("bumped-top");
+                    bumped = true;
+                } else {
+                    $this.removeClass("bumped-top bumped-bottom");
+                }
+                
+                if (box.left > data.threshold.left) {
+                    $this.addClass("bumped-left").removeClass("bumped-right");
+                    bumped = true;
+                } else if (box.right < data.threshold.right) {
+                    $this.addClass("bumped-right").removeClass("bumped-left");
+                    bumped = true;
+                } else {
+                    $this.removeClass("bumped-left bumped-right");
+                }
+                
+                if (bumped) {
+                    $this.addClass("bumped");
+                } else {
+                    $this.removeClass("bumped");
+                }
+            });
         }
     };
     registry.register(_);
@@ -21313,11 +19247,11 @@ define("jquery_anythingslider", ["jquery"], function(){});
 define('patterns/carousel',[
     "jquery",
     "../registry",
-    "../logging",
+    "../core/logger",
     "../core/parser",
     "jquery_anythingslider"
-], function($, patterns, logging, Parser) {
-    var log = logging.getLogger("carousel"),
+], function($, patterns, logger, Parser) {
+    var log = logger.getLogger("pat.carousel"),
         parser = new Parser("carousel");
 
     parser.add_argument("auto-play", false);
@@ -21336,41 +19270,61 @@ define('patterns/carousel',[
 
         init: function($el, opts) {
             return $el.each(function() {
-                var options = parser.parse($(this), opts),
+                var $carousel = $(this),
+                    options = parser.parse($carousel, opts),
                     settings = {hashTags: false};
 
                 settings.autoPlay = options.autoPlay;
                 settings.stopAtEnd = !options.loop;
                 settings.resizeContents = options.resize;
                 settings.expand = options.expand;
-                settings.buildArrows = options.controlArrows;
-                settings.buildNavigation = options.controlNavigation;
-                settings.buildStartStop = options.controlStartstop;
-                settings.delay = options.timeDelay;
-                settings.animationTime = options.timeAnimation;
+                settings.buildArrows = options.control.arrows;
+                settings.buildNavigation = options.control.navigation;
+                settings.buildStartStop = options.control.startstop;
+                settings.delay = options.time.delay;
+                settings.animationTime = options.time.animation;
                 settings.onInitialized = carousel.onInitialized;
                 settings.onSlideInit = carousel.onSlideInit;
-
-                var $carousel = $(this).anythingSlider(settings),
-                    control = $carousel.data("AnythingSlider"),
-                    $panel_links = $();
-
-                $carousel
-                    .children().each(function(index, el) {
-                        if (!this.id)
-                            return;
-
-                        var $links = $("a[href=#" + this.id+"]");
-                        if (index===control.currentPage)
-                            $links.addClass("current");
-                        else
-                            $links.removeClass("current");
-                        $links.on("click.pat-carousel", null, {control: control, index: index}, carousel.onPanelLinkClick);
-                        $panel_links = $panel_links.add($links);
-                    }).end()
-                    .on("slide_complete.pat-carousel", null, $panel_links, carousel.onSlideComplete);
+                carousel.setup($carousel, settings);
             });
         },
+
+	setup: function($el, settings) {
+            var loaded = true,
+                $images = $el.find("img"),
+                img, i;
+            for (i=0; loaded && i<$images.length; i++) {
+                img=$images[i];
+                if (!img.complete || img.naturalWidth===0)
+                    loaded=false;
+            }
+            if (!loaded) {
+                log.debug("Delaying carousel setup until images have loaded.");
+                setTimeout(function() {
+                    carousel.setup($el, settings);
+                }, 50);
+                return;
+            }
+
+            var $carousel = $el.anythingSlider(settings),
+                control = $carousel.data("AnythingSlider"),
+                $panel_links = $();
+
+            $carousel
+                .children().each(function(index) {
+                    if (!this.id)
+                        return;
+
+                    var $links = $("a[href=#" + this.id+"]");
+                    if (index===control.currentPage)
+                        $links.addClass("current");
+                    else
+                        $links.removeClass("current");
+                    $links.on("click.pat-carousel", null, {control: control, index: index}, carousel.onPanelLinkClick);
+                    $panel_links = $panel_links.add($links);
+                }).end()
+                .on("slide_complete.pat-carousel", null, $panel_links, carousel.onSlideComplete);
+	},
 
         _loadPanelImages: function(slider, page) {
             var $img;
@@ -21426,44 +19380,80 @@ define('patterns/checkedflag',[
 ], function($, patterns) {
     var checkedflag = {
         name: "checkedflag",
-        trigger: "input",
+        trigger: "input[type=checkbox],input[type=radio]",
 
         init: function($el) {
+            var $forms = $();
             $el
-                .filter("[type=checkbox]").each(checkedflag.onChangeCheckbox).end()
-                .filter("[type=radio]").each(checkedflag.onChangeRadio).end();
+                .each(function() {
+                    if (this.form===null)
+                        return;
+                    var $form = $(this.form);
+                    if ($form.data("patternCheckedflag.reset"))
+                        return;
+                    $form.data("patternCheckedflag.reset", true);
+                    $forms=$forms.add(this.form);
+                })
+                .filter("[type=checkbox]")
+                    .each(checkedflag.onChangeCheckbox)
+                    .on("change.patternCheckedflag", checkedflag.onChangeCheckbox)
+                    .end()
+                .filter("[type=radio]")
+                    .each(checkedflag.onChangeRadio)
+                    .on("change.patternCheckedflag", checkedflag.onChangeRadio)
+                    .end();
+            $forms.on("reset.patternCheckedflag", checkedflag.onFormReset);
         },
 
-        onChangeCheckbox: function(e) {
+        onFormReset: function() {
+            // This event is triggered before the form is reset, and we need
+            // the post-reset state to update our pattern. Use a small delay
+            // to fix this.
+            var form = this;
+            setTimeout(function() {
+                $("input[type=checkbox]", form).each(checkedflag.onChangeCheckbox);
+                $("input[type=radio]", form).each(checkedflag.onChangeRadio);
+            }, 50);
+        },
+
+        onChangeCheckbox: function() {
             var $el = $(this),
-                $label = $el.closest("label");
+                $label = $el.closest("label"),
+                $fieldset = $el.closest("fieldset");
 
             if (this.checked) {
-                $label.removeClass("unchecked").addClass("checked");
+                $label.add($fieldset).removeClass("unchecked").addClass("checked");
             } else {
                 $label.addClass("unchecked").removeClass("checked");
+                if ($fieldset.find("input:checked").length)
+                    $fieldset.removeClass("unchecked").addClass("checked");
+                else
+                    $fieldset.addClass("unchecked").removeClass("checked");
             }
         },
 
-        onChangeRadio: function(e) {
+        onChangeRadio: function() {
             var $el = $(this),
                 $label = $el.closest("label"),
+                $fieldset = $el.closest("fieldset"),
                 selector = "label:has(input[name='" + this.name + "']:not(:checked))",
                 $siblings = (this.form===null) ? $(selector) : $(selector, this.form);
 
             $siblings.removeClass("checked").addClass("unchecked");
             if (this.checked) {
-                $label.removeClass("unchecked").addClass("checked");
+                $label.add($fieldset).removeClass("unchecked").addClass("checked");
             } else {
                 $label.addClass("unchecked").removeClass("checked");
+                if ($fieldset.find("input:checked").length)
+                    $fieldset.removeClass("unchecked").addClass("checked");
+                else
+                    $fieldset.addClass("unchecked").removeClass("checked");
             }
         }
     };
 
-    $(document)
-       .on("change", "input[type=checkbox]", checkedflag.onChangeCheckbox)
-       .on("change", "input[type=radio]", checkedflag.onChangeRadio);
     patterns.register(checkedflag);
+    return checkedflag;
 });
 
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
@@ -21472,18 +19462,16 @@ define('patterns/checkedflag',[
 define('patterns/checklist',[
     "jquery",
     "../core/parser",
-    "../logging",
     "../registry"
-], function($, Parser, logging, registry) {
-    var log = logging.getLogger("checklist"),
-        parser = new Parser("checklist");
+], function($, Parser, registry) {
+    var parser = new Parser("checklist");
     parser.add_argument("select", ".functions .select-all");
     parser.add_argument("deselect", ".functions .deselect-all");
 
     var _ = {
         name: "checklist",
         trigger: ".pat-checklist",
-        jquery_plugin: "patternChecklist",
+        jquery_plugin: true,
 
         init: function($el, opts) {
             return $el.each(function() {
@@ -21516,18 +19504,18 @@ define('patterns/checklist',[
                 deselect = $trigger.find(options.deselect),
                 select = $trigger.find(options.select);
 
-            if (($trigger.find('input[type=checkbox]:visible:checked').length===0) &&
-                (!deselect.prop('disabled'))) {
-                deselect.attr({disabled: 'disabled'});
-            } else if (deselect.prop('disabled')) {
-                deselect.prop('disabled', false);
+            if (($trigger.find("input[type=checkbox]:visible:checked").length===0) &&
+                (!deselect.prop("disabled"))) {
+                deselect.attr({disabled: "disabled"});
+            } else if (deselect.prop("disabled")) {
+                deselect.prop("disabled", false);
             }
 
-            if (($trigger.find('input[type=checkbox]:visible:not(:checked)').length===0) &&
-                (!select.prop('disabled'))) {
-                select.attr({disabled: 'disabled'});
-            } else if (select.prop('disabled')) {
-                select.prop('disabled', false);
+            if (($trigger.find("input[type=checkbox]:visible:not(:checked)").length===0) &&
+                (!select.prop("disabled"))) {
+                select.attr({disabled: "disabled"});
+            } else if (select.prop("disabled")) {
+                select.prop("disabled", false);
             }
         },
 
@@ -22519,12 +20507,9 @@ Copyright (c) 2011 by Harvest
 define("jquery_chosen", ["jquery"], function(){});
 
 define('patterns/chosen',[
-    '../logging',
-    '../registry',
-    'jquery_chosen'
-], function(logging, registry) {
-    var log = logging.getLogger('chosen');
-
+    "../registry",
+    "jquery_chosen"
+], function(registry) {
     var _ = {
         name: "chosen",
         trigger: "select.pat-chosen",
@@ -22532,7 +20517,8 @@ define('patterns/chosen',[
             $el.chosen();
             return $el;
         },
-        destroy: function($el) {
+
+        destroy: function() {
             // XXX
         }
     };
@@ -22544,126 +20530,2689 @@ define('patterns/chosen',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
-define('lib/ajax',['require','../logging'],function(require) {
-    var log = require('../logging').getLogger('ajaxlib');
+// This could become a jquery.form replacement or start using jquery.form
+define('lib/ajax',[
+    "jquery",
+    "../core/logger"
+], function($, logger) {
+    var log = logger.getLogger('ajaxlib');
 
-    var submit = function($el, opts) {
-        // XXX: make these only defaults
-        opts.context = $el;
-        opts.error = function(a,b,c,d) {
-            log.error(arguments);
+    // XXX: this should become a pattern to make use of jquery.form's
+    // captureClick among others
+    var ajax = function($el, opts) {
+        opts = opts || {};
+
+        var args = {
+            context: $el,
+            url: opts.url || undefined,
+            error: function(jqxhr, status, error) {
+                // error can also stem from a javascript exception, not
+                // only errors described in the jqxhr
+                log.error("load error for " + opts.url + ":", error, jqxhr);
+                $el.trigger({
+                    type: "pat-ajax-error",
+                    error: error,
+                    jqxhr: jqxhr
+                });
+            },
+            success: function(data, status, jqxhr) {
+                log.debug("success: jqxhr:", jqxhr);
+                $el.trigger({
+                    type: "pat-ajax-success",
+                    jqxhr: jqxhr
+                });
+            }
         };
 
         if ($el.is('form')) {
             log.debug('form submit', $el);
-            opts.url = $el.attr('action');
+            // XXX: switch to default GET (jquery and jquery.form)
+            args.type = $el.attr('method') || 'POST';
+            // XXX: to be handled as default by ajaxSubmit/ajaxForm
+            args.url = $el.attr('action');
+            // XXX: to be handled as default by ajaxSubmit/ajaxForm
             if (opts.beforeSerialize) {
                 opts.beforeSerialize();
             }
-            opts.data = $el.serialize() + '&submit=submit';
-            opts.type = $el.attr('method') || 'POST';
-            $.ajax(opts);
+            // XXX: this needs to become extra-data passed to the
+            // ajax/inject pattern
+            args.data = $el.serialize() + '&submit=submit';
+            $.ajax(args);
         } else {
             log.debug('submit', $el);
-            $.ajax(opts);
+            $.ajax(args);
         }
     };
 
-    return submit;
+    return ajax;
 });
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
+/*! http://mths.be/punycode by @mathias */
+;(function(root) {
+
+	/**
+	 * The `punycode` object.
+	 * @name punycode
+	 * @type Object
+	 */
+	var punycode,
+
+	/** Detect free variables `define`, `exports`, `module` and `require` */
+	freeDefine = typeof define == 'function' && typeof define.amd == 'object' &&
+		define.amd && define,
+	freeExports = typeof exports == 'object' && exports,
+	freeModule = typeof module == 'object' && module,
+	freeRequire = typeof require == 'function' && require,
+
+	/** Highest positive signed 32-bit float value */
+	maxInt = 2147483647, // aka. 0x7FFFFFFF or 2^31-1
+
+	/** Bootstring parameters */
+	base = 36,
+	tMin = 1,
+	tMax = 26,
+	skew = 38,
+	damp = 700,
+	initialBias = 72,
+	initialN = 128, // 0x80
+	delimiter = '-', // '\x2D'
+
+	/** Regular expressions */
+	regexNonASCII = /[^ -~]/, // unprintable ASCII chars + non-ASCII chars
+	regexPunycode = /^xn--/,
+
+	/** Error messages */
+	errors = {
+		'overflow': 'Overflow: input needs wider integers to process.',
+		'not-basic': 'Illegal input >= 0x80 (not a basic code point)',
+		'invalid-input': 'Invalid input'
+	},
+
+	/** Convenience shortcuts */
+	baseMinusTMin = base - tMin,
+	floor = Math.floor,
+	stringFromCharCode = String.fromCharCode,
+
+	/** Temporary variable */
+	key;
+
+	/*--------------------------------------------------------------------------*/
+
+	/**
+	 * A generic error utility function.
+	 * @private
+	 * @param {String} type The error type.
+	 * @returns {Error} Throws a `RangeError` with the applicable error message.
+	 */
+	function error(type) {
+		throw RangeError(errors[type]);
+	}
+
+	/**
+	 * A generic `Array#map` utility function.
+	 * @private
+	 * @param {Array} array The array to iterate over.
+	 * @param {Function} callback The function that gets called for every array
+	 * item.
+	 * @returns {Array} A new array of values returned by the callback function.
+	 */
+	function map(array, fn) {
+		var length = array.length;
+		while (length--) {
+			array[length] = fn(array[length]);
+		}
+		return array;
+	}
+
+	/**
+	 * A simple `Array#map`-like wrapper to work with domain name strings.
+	 * @private
+	 * @param {String} domain The domain name.
+	 * @param {Function} callback The function that gets called for every
+	 * character.
+	 * @returns {Array} A new string of characters returned by the callback
+	 * function.
+	 */
+	function mapDomain(string, fn) {
+		var glue = '.';
+		return map(string.split(glue), fn).join(glue);
+	}
+
+	/**
+	 * Creates an array containing the decimal code points of each Unicode
+	 * character in the string. While JavaScript uses UCS-2 internally,
+	 * this function will convert a pair of surrogate halves (each of which
+	 * UCS-2 exposes as separate characters) into a single code point,
+	 * matching UTF-16.
+	 * @see `punycode.ucs2.encode`
+	 * @see <http://mathiasbynens.be/notes/javascript-encoding>
+	 * @memberOf punycode.ucs2
+	 * @name decode
+	 * @param {String} string The Unicode input string (UCS-2).
+	 * @returns {Array} The new array of code points.
+	 */
+	function ucs2decode(string) {
+		var output = [],
+		    counter = 0,
+		    length = string.length,
+		    value,
+		    extra;
+		while (counter < length) {
+			value = string.charCodeAt(counter++);
+			if ((value & 0xF800) == 0xD800 && counter < length) {
+				// high surrogate, and there is a next character
+				extra = string.charCodeAt(counter++);
+				if ((extra & 0xFC00) == 0xDC00) { // low surrogate
+					output.push(((value & 0x3FF) << 10) + (extra & 0x3FF) + 0x10000);
+				} else {
+					output.push(value, extra);
+				}
+			} else {
+				output.push(value);
+			}
+		}
+		return output;
+	}
+
+	/**
+	 * Creates a string based on an array of decimal code points.
+	 * @see `punycode.ucs2.decode`
+	 * @memberOf punycode.ucs2
+	 * @name encode
+	 * @param {Array} codePoints The array of decimal code points.
+	 * @returns {String} The new Unicode string (UCS-2).
+	 */
+	function ucs2encode(array) {
+		return map(array, function(value) {
+			var output = '';
+			if (value > 0xFFFF) {
+				value -= 0x10000;
+				output += stringFromCharCode(value >>> 10 & 0x3FF | 0xD800);
+				value = 0xDC00 | value & 0x3FF;
+			}
+			output += stringFromCharCode(value);
+			return output;
+		}).join('');
+	}
+
+	/**
+	 * Converts a basic code point into a digit/integer.
+	 * @see `digitToBasic()`
+	 * @private
+	 * @param {Number} codePoint The basic (decimal) code point.
+	 * @returns {Number} The numeric value of a basic code point (for use in
+	 * representing integers) in the range `0` to `base - 1`, or `base` if
+	 * the code point does not represent a value.
+	 */
+	function basicToDigit(codePoint) {
+		return codePoint - 48 < 10
+			? codePoint - 22
+			: codePoint - 65 < 26
+				? codePoint - 65
+				: codePoint - 97 < 26
+					? codePoint - 97
+					: base;
+	}
+
+	/**
+	 * Converts a digit/integer into a basic code point.
+	 * @see `basicToDigit()`
+	 * @private
+	 * @param {Number} digit The numeric value of a basic code point.
+	 * @returns {Number} The basic code point whose value (when used for
+	 * representing integers) is `digit`, which needs to be in the range
+	 * `0` to `base - 1`. If `flag` is non-zero, the uppercase form is
+	 * used; else, the lowercase form is used. The behavior is undefined
+	 * if flag is non-zero and `digit` has no uppercase form.
+	 */
+	function digitToBasic(digit, flag) {
+		//  0..25 map to ASCII a..z or A..Z
+		// 26..35 map to ASCII 0..9
+		return digit + 22 + 75 * (digit < 26) - ((flag != 0) << 5);
+	}
+
+	/**
+	 * Bias adaptation function as per section 3.4 of RFC 3492.
+	 * http://tools.ietf.org/html/rfc3492#section-3.4
+	 * @private
+	 */
+	function adapt(delta, numPoints, firstTime) {
+		var k = 0;
+		delta = firstTime ? floor(delta / damp) : delta >> 1;
+		delta += floor(delta / numPoints);
+		for (/* no initialization */; delta > baseMinusTMin * tMax >> 1; k += base) {
+			delta = floor(delta / baseMinusTMin);
+		}
+		return floor(k + (baseMinusTMin + 1) * delta / (delta + skew));
+	}
+
+	/**
+	 * Converts a basic code point to lowercase is `flag` is falsy, or to
+	 * uppercase if `flag` is truthy. The code point is unchanged if it's
+	 * caseless. The behavior is undefined if `codePoint` is not a basic code
+	 * point.
+	 * @private
+	 * @param {Number} codePoint The numeric value of a basic code point.
+	 * @returns {Number} The resulting basic code point.
+	 */
+	function encodeBasic(codePoint, flag) {
+		codePoint -= (codePoint - 97 < 26) << 5;
+		return codePoint + (!flag && codePoint - 65 < 26) << 5;
+	}
+
+	/**
+	 * Converts a Punycode string of ASCII code points to a string of Unicode
+	 * code points.
+	 * @memberOf punycode
+	 * @param {String} input The Punycode string of ASCII code points.
+	 * @returns {String} The resulting string of Unicode code points.
+	 */
+	function decode(input) {
+		// Don't use UCS-2
+		var output = [],
+		    inputLength = input.length,
+		    out,
+		    i = 0,
+		    n = initialN,
+		    bias = initialBias,
+		    basic,
+		    j,
+		    index,
+		    oldi,
+		    w,
+		    k,
+		    digit,
+		    t,
+		    length,
+		    /** Cached calculation results */
+		    baseMinusT;
+
+		// Handle the basic code points: let `basic` be the number of input code
+		// points before the last delimiter, or `0` if there is none, then copy
+		// the first basic code points to the output.
+
+		basic = input.lastIndexOf(delimiter);
+		if (basic < 0) {
+			basic = 0;
+		}
+
+		for (j = 0; j < basic; ++j) {
+			// if it's not a basic code point
+			if (input.charCodeAt(j) >= 0x80) {
+				error('not-basic');
+			}
+			output.push(input.charCodeAt(j));
+		}
+
+		// Main decoding loop: start just after the last delimiter if any basic code
+		// points were copied; start at the beginning otherwise.
+
+		for (index = basic > 0 ? basic + 1 : 0; index < inputLength; /* no final expression */) {
+
+			// `index` is the index of the next character to be consumed.
+			// Decode a generalized variable-length integer into `delta`,
+			// which gets added to `i`. The overflow checking is easier
+			// if we increase `i` as we go, then subtract off its starting
+			// value at the end to obtain `delta`.
+			for (oldi = i, w = 1, k = base; /* no condition */; k += base) {
+
+				if (index >= inputLength) {
+					error('invalid-input');
+				}
+
+				digit = basicToDigit(input.charCodeAt(index++));
+
+				if (digit >= base || digit > floor((maxInt - i) / w)) {
+					error('overflow');
+				}
+
+				i += digit * w;
+				t = k <= bias ? tMin : (k >= bias + tMax ? tMax : k - bias);
+
+				if (digit < t) {
+					break;
+				}
+
+				baseMinusT = base - t;
+				if (w > floor(maxInt / baseMinusT)) {
+					error('overflow');
+				}
+
+				w *= baseMinusT;
+
+			}
+
+			out = output.length + 1;
+			bias = adapt(i - oldi, out, oldi == 0);
+
+			// `i` was supposed to wrap around from `out` to `0`,
+			// incrementing `n` each time, so we'll fix that now:
+			if (floor(i / out) > maxInt - n) {
+				error('overflow');
+			}
+
+			n += floor(i / out);
+			i %= out;
+
+			// Insert `n` at position `i` of the output
+			output.splice(i++, 0, n);
+
+		}
+
+		return ucs2encode(output);
+	}
+
+	/**
+	 * Converts a string of Unicode code points to a Punycode string of ASCII
+	 * code points.
+	 * @memberOf punycode
+	 * @param {String} input The string of Unicode code points.
+	 * @returns {String} The resulting Punycode string of ASCII code points.
+	 */
+	function encode(input) {
+		var n,
+		    delta,
+		    handledCPCount,
+		    basicLength,
+		    bias,
+		    j,
+		    m,
+		    q,
+		    k,
+		    t,
+		    currentValue,
+		    output = [],
+		    /** `inputLength` will hold the number of code points in `input`. */
+		    inputLength,
+		    /** Cached calculation results */
+		    handledCPCountPlusOne,
+		    baseMinusT,
+		    qMinusT;
+
+		// Convert the input in UCS-2 to Unicode
+		input = ucs2decode(input);
+
+		// Cache the length
+		inputLength = input.length;
+
+		// Initialize the state
+		n = initialN;
+		delta = 0;
+		bias = initialBias;
+
+		// Handle the basic code points
+		for (j = 0; j < inputLength; ++j) {
+			currentValue = input[j];
+			if (currentValue < 0x80) {
+				output.push(stringFromCharCode(currentValue));
+			}
+		}
+
+		handledCPCount = basicLength = output.length;
+
+		// `handledCPCount` is the number of code points that have been handled;
+		// `basicLength` is the number of basic code points.
+
+		// Finish the basic string - if it is not empty - with a delimiter
+		if (basicLength) {
+			output.push(delimiter);
+		}
+
+		// Main encoding loop:
+		while (handledCPCount < inputLength) {
+
+			// All non-basic code points < n have been handled already. Find the next
+			// larger one:
+			for (m = maxInt, j = 0; j < inputLength; ++j) {
+				currentValue = input[j];
+				if (currentValue >= n && currentValue < m) {
+					m = currentValue;
+				}
+			}
+
+			// Increase `delta` enough to advance the decoder's <n,i> state to <m,0>,
+			// but guard against overflow
+			handledCPCountPlusOne = handledCPCount + 1;
+			if (m - n > floor((maxInt - delta) / handledCPCountPlusOne)) {
+				error('overflow');
+			}
+
+			delta += (m - n) * handledCPCountPlusOne;
+			n = m;
+
+			for (j = 0; j < inputLength; ++j) {
+				currentValue = input[j];
+
+				if (currentValue < n && ++delta > maxInt) {
+					error('overflow');
+				}
+
+				if (currentValue == n) {
+					// Represent delta as a generalized variable-length integer
+					for (q = delta, k = base; /* no condition */; k += base) {
+						t = k <= bias ? tMin : (k >= bias + tMax ? tMax : k - bias);
+						if (q < t) {
+							break;
+						}
+						qMinusT = q - t;
+						baseMinusT = base - t;
+						output.push(
+							stringFromCharCode(digitToBasic(t + qMinusT % baseMinusT, 0))
+						);
+						q = floor(qMinusT / baseMinusT);
+					}
+
+					output.push(stringFromCharCode(digitToBasic(q, 0)));
+					bias = adapt(delta, handledCPCountPlusOne, handledCPCount == basicLength);
+					delta = 0;
+					++handledCPCount;
+				}
+			}
+
+			++delta;
+			++n;
+
+		}
+		return output.join('');
+	}
+
+	/**
+	 * Converts a Punycode string representing a domain name to Unicode. Only the
+	 * Punycoded parts of the domain name will be converted, i.e. it doesn't
+	 * matter if you call it on a string that has already been converted to
+	 * Unicode.
+	 * @memberOf punycode
+	 * @param {String} domain The Punycode domain name to convert to Unicode.
+	 * @returns {String} The Unicode representation of the given Punycode
+	 * string.
+	 */
+	function toUnicode(domain) {
+		return mapDomain(domain, function(string) {
+			return regexPunycode.test(string)
+				? decode(string.slice(4).toLowerCase())
+				: string;
+		});
+	}
+
+	/**
+	 * Converts a Unicode string representing a domain name to Punycode. Only the
+	 * non-ASCII parts of the domain name will be converted, i.e. it doesn't
+	 * matter if you call it with a domain that's already in ASCII.
+	 * @memberOf punycode
+	 * @param {String} domain The domain name to convert, as a Unicode string.
+	 * @returns {String} The Punycode representation of the given domain name.
+	 */
+	function toASCII(domain) {
+		return mapDomain(domain, function(string) {
+			return regexNonASCII.test(string)
+				? 'xn--' + encode(string)
+				: string;
+		});
+	}
+
+	/*--------------------------------------------------------------------------*/
+
+	/** Define the public API */
+	punycode = {
+		/**
+		 * A string representing the current Punycode.js version number.
+		 * @memberOf punycode
+		 * @type String
+		 */
+		'version': '1.1.1',
+		/**
+		 * An object of methods to convert from JavaScript's internal character
+		 * representation (UCS-2) to decimal Unicode code points, and back.
+		 * @see <http://mathiasbynens.be/notes/javascript-encoding>
+		 * @memberOf punycode
+		 * @type Object
+		 */
+		'ucs2': {
+			'decode': ucs2decode,
+			'encode': ucs2encode
+		},
+		'decode': decode,
+		'encode': encode,
+		'toASCII': toASCII,
+		'toUnicode': toUnicode
+	};
+
+	/** Expose `punycode` */
+	if (freeExports) {
+		if (freeModule && freeModule.exports == freeExports) {
+			// in Node.js or Ringo 0.8+
+			freeModule.exports = punycode;
+		} else {
+			// in Narwhal or Ringo 0.7-
+			for (key in punycode) {
+				punycode.hasOwnProperty(key) && (freeExports[key] = punycode[key]);
+			}
+		}
+	} else if (freeDefine) {
+		// via curl.js or RequireJS
+		define('punycode', punycode);
+	} else {
+		// in a browser or Rhino
+		root.punycode = punycode;
+	}
+
+}(this));
+define("URIjs/punycode", function(){});
+
+/*!
+ * URI.js - Mutating URLs
+ * IPv6 Support
+ *
+ * Version: 1.8.0
+ *
+ * Author: Rodney Rehm
+ * Web: http://medialize.github.com/URI.js/
+ *
+ * Licensed under
+ *   MIT License http://www.opensource.org/licenses/mit-license
+ *   GPL v3 http://opensource.org/licenses/GPL-3.0
+ *
+ */
+(function (root, factory) {
+    // https://github.com/umdjs/umd/blob/master/returnExports.js
+    if (typeof exports === 'object') {
+        // Node
+        module.exports = factory();
+    } else if (typeof define === 'function' && define.amd) {
+        // AMD. Register as an anonymous module.
+        define('URIjs/IPv6',factory);
+    } else {
+        // Browser globals (root is window)
+        root.IPv6 = factory();
+    }
+}(this, function () {
+
+
+/*
+var _in = "fe80:0000:0000:0000:0204:61ff:fe9d:f156";
+var _out = IPv6.best(_in);
+var _expected = "fe80::204:61ff:fe9d:f156";
+
+console.log(_in, _out, _expected, _out === _expected);
+*/
+
+function best(address) {
+    // based on:
+    // Javascript to test an IPv6 address for proper format, and to
+    // present the "best text representation" according to IETF Draft RFC at
+    // http://tools.ietf.org/html/draft-ietf-6man-text-addr-representation-04
+    // 8 Feb 2010 Rich Brown, Dartware, LLC
+    // Please feel free to use this code as long as you provide a link to
+    // http://www.intermapper.com
+    // http://intermapper.com/support/tools/IPV6-Validator.aspx
+    // http://download.dartware.com/thirdparty/ipv6validator.js
+
+    var _address = address.toLowerCase();
+    var segments = _address.split(':');
+    var length = segments.length;
+    var total = 8;
+
+    // trim colons (:: or ::a:b:c… or …a:b:c::)
+    if (segments[0] === '' && segments[1] === '' && segments[2] === '') {
+        // must have been ::
+        // remove first two items
+        segments.shift();
+        segments.shift();
+    } else if (segments[0] === '' && segments[1] === '') {
+        // must have been ::xxxx
+        // remove the first item
+        segments.shift();
+    } else if (segments[length - 1] === '' && segments[length - 2] === '') {
+        // must have been xxxx::
+        segments.pop();
+    }
+
+    length = segments.length;
+
+    // adjust total segments for IPv4 trailer
+    if (segments[length - 1].indexOf('.') !== -1) {
+        // found a "." which means IPv4
+        total = 7;
+    }
+
+    // fill empty segments them with "0000"
+    var pos;
+    for (pos = 0; pos < length; pos++) {
+        if (segments[pos] === '') {
+            break;
+        }
+    }
+
+    if (pos < total) {
+        segments.splice(pos, 1, '0000');
+        while (segments.length < total) {
+            segments.splice(pos, 0, '0000');
+        }
+
+        length = segments.length;
+    }
+
+    // strip leading zeros
+    var _segments;
+    for (var i = 0; i < total; i++) {
+        _segments = segments[i].split("");
+        for (var j = 0; j < 3 ; j++) {
+            if (_segments[0] === '0' && _segments.length > 1) {
+                _segments.splice(0,1);
+            } else {
+                break;
+            }
+        }
+
+        segments[i] = _segments.join("");
+    }
+
+    // find longest sequence of zeroes and coalesce them into one segment
+    var best = -1;
+    var _best = 0;
+    var _current = 0;
+    var current = -1;
+    var inzeroes = false;
+    // i; already declared
+
+    for (i = 0; i < total; i++) {
+        if (inzeroes) {
+            if (segments[i] === '0') {
+                _current += 1;
+            } else {
+                inzeroes = false;
+                if (_current > _best) {
+                    best = current;
+                    _best = _current;
+                }
+            }
+        } else {
+            if (segments[i] == '0') {
+                inzeroes = true;
+                current = i;
+                _current = 1;
+            }
+        }
+    }
+
+    if (_current > _best) {
+        best = current;
+        _best = _current;
+    }
+
+    if (_best > 1) {
+        segments.splice(best, _best, "");
+    }
+
+    length = segments.length;
+
+    // assemble remaining segments
+    var result = '';
+    if (segments[0] === '')  {
+        beststr = ":";
+    }
+
+    for (i = 0; i < length; i++) {
+        result += segments[i];
+        if (i === length - 1) {
+            break;
+        }
+
+        result += ':';
+    }
+
+    if (segments[length - 1] === '') {
+        result += ":";
+    }
+
+    return result;
+};
+
+return {
+    best: best
+};
+}));
+/*!
+ * URI.js - Mutating URLs
+ * Second Level Domain (SLD) Support
+ *
+ * Version: 1.8.0
+ *
+ * Author: Rodney Rehm
+ * Web: http://medialize.github.com/URI.js/
+ *
+ * Licensed under
+ *   MIT License http://www.opensource.org/licenses/mit-license
+ *   GPL v3 http://opensource.org/licenses/GPL-3.0
+ *
+ */
+
+(function (root, factory) {
+    // https://github.com/umdjs/umd/blob/master/returnExports.js
+    if (typeof exports === 'object') {
+        // Node
+        module.exports = factory();
+    } else if (typeof define === 'function' && define.amd) {
+        // AMD. Register as an anonymous module.
+        define('URIjs/SecondLevelDomains',factory);
+    } else {
+        // Browser globals (root is window)
+        root.SecondLevelDomains = factory();
+    }
+}(this, function () {
+
+
+var hasOwn = Object.prototype.hasOwnProperty;
+var SLD = {
+    // list of known Second Level Domains
+    // converted list of SLDs from https://github.com/gavingmiller/second-level-domains
+    // ----
+    // publicsuffix.org is more current and actually used by a couple of browsers internally.
+    // downside is it also contains domains like "dyndns.org" - which is fine for the security
+    // issues browser have to deal with (SOP for cookies, etc) - but is way overboard for URI.js
+    // ----
+    list: {
+        "ac":"com|gov|mil|net|org",
+        "ae":"ac|co|gov|mil|name|net|org|pro|sch",
+        "af":"com|edu|gov|net|org",
+        "al":"com|edu|gov|mil|net|org",
+        "ao":"co|ed|gv|it|og|pb",
+        "ar":"com|edu|gob|gov|int|mil|net|org|tur",
+        "at":"ac|co|gv|or",
+        "au":"asn|com|csiro|edu|gov|id|net|org",
+        "ba":"co|com|edu|gov|mil|net|org|rs|unbi|unmo|unsa|untz|unze",
+        "bb":"biz|co|com|edu|gov|info|net|org|store|tv",
+        "bh":"biz|cc|com|edu|gov|info|net|org",
+        "bn":"com|edu|gov|net|org",
+        "bo":"com|edu|gob|gov|int|mil|net|org|tv",
+        "br":"adm|adv|agr|am|arq|art|ato|b|bio|blog|bmd|cim|cng|cnt|com|coop|ecn|edu|eng|esp|etc|eti|far|flog|fm|fnd|fot|fst|g12|ggf|gov|imb|ind|inf|jor|jus|lel|mat|med|mil|mus|net|nom|not|ntr|odo|org|ppg|pro|psc|psi|qsl|rec|slg|srv|tmp|trd|tur|tv|vet|vlog|wiki|zlg",
+        "bs":"com|edu|gov|net|org",
+        "bz":"du|et|om|ov|rg",
+        "ca":"ab|bc|mb|nb|nf|nl|ns|nt|nu|on|pe|qc|sk|yk",
+        "ck":"biz|co|edu|gen|gov|info|net|org",
+        "cn":"ac|ah|bj|com|cq|edu|fj|gd|gov|gs|gx|gz|ha|hb|he|hi|hl|hn|jl|js|jx|ln|mil|net|nm|nx|org|qh|sc|sd|sh|sn|sx|tj|tw|xj|xz|yn|zj",
+        "co":"com|edu|gov|mil|net|nom|org",
+        "cr":"ac|c|co|ed|fi|go|or|sa",
+        "cy":"ac|biz|com|ekloges|gov|ltd|name|net|org|parliament|press|pro|tm",
+        "do":"art|com|edu|gob|gov|mil|net|org|sld|web",
+        "dz":"art|asso|com|edu|gov|net|org|pol",
+        "ec":"com|edu|fin|gov|info|med|mil|net|org|pro",
+        "eg":"com|edu|eun|gov|mil|name|net|org|sci",
+        "er":"com|edu|gov|ind|mil|net|org|rochest|w",
+        "es":"com|edu|gob|nom|org",
+        "et":"biz|com|edu|gov|info|name|net|org",
+        "fj":"ac|biz|com|info|mil|name|net|org|pro",
+        "fk":"ac|co|gov|net|nom|org",
+        "fr":"asso|com|f|gouv|nom|prd|presse|tm",
+        "gg":"co|net|org",
+        "gh":"com|edu|gov|mil|org",
+        "gn":"ac|com|gov|net|org",
+        "gr":"com|edu|gov|mil|net|org",
+        "gt":"com|edu|gob|ind|mil|net|org",
+        "gu":"com|edu|gov|net|org",
+        "hk":"com|edu|gov|idv|net|org",
+        "id":"ac|co|go|mil|net|or|sch|web",
+        "il":"ac|co|gov|idf|k12|muni|net|org",
+        "in":"ac|co|edu|ernet|firm|gen|gov|i|ind|mil|net|nic|org|res",
+        "iq":"com|edu|gov|i|mil|net|org",
+        "ir":"ac|co|dnssec|gov|i|id|net|org|sch",
+        "it":"edu|gov",
+        "je":"co|net|org",
+        "jo":"com|edu|gov|mil|name|net|org|sch",
+        "jp":"ac|ad|co|ed|go|gr|lg|ne|or",
+        "ke":"ac|co|go|info|me|mobi|ne|or|sc",
+        "kh":"com|edu|gov|mil|net|org|per",
+        "ki":"biz|com|de|edu|gov|info|mob|net|org|tel",
+        "km":"asso|com|coop|edu|gouv|k|medecin|mil|nom|notaires|pharmaciens|presse|tm|veterinaire",
+        "kn":"edu|gov|net|org",
+        "kr":"ac|busan|chungbuk|chungnam|co|daegu|daejeon|es|gangwon|go|gwangju|gyeongbuk|gyeonggi|gyeongnam|hs|incheon|jeju|jeonbuk|jeonnam|k|kg|mil|ms|ne|or|pe|re|sc|seoul|ulsan",
+        "kw":"com|edu|gov|net|org",
+        "ky":"com|edu|gov|net|org",
+        "kz":"com|edu|gov|mil|net|org",
+        "lb":"com|edu|gov|net|org",
+        "lk":"assn|com|edu|gov|grp|hotel|int|ltd|net|ngo|org|sch|soc|web",
+        "lr":"com|edu|gov|net|org",
+        "lv":"asn|com|conf|edu|gov|id|mil|net|org",
+        "ly":"com|edu|gov|id|med|net|org|plc|sch",
+        "ma":"ac|co|gov|m|net|org|press",
+        "mc":"asso|tm",
+        "me":"ac|co|edu|gov|its|net|org|priv",
+        "mg":"com|edu|gov|mil|nom|org|prd|tm",
+        "mk":"com|edu|gov|inf|name|net|org|pro",
+        "ml":"com|edu|gov|net|org|presse",
+        "mn":"edu|gov|org",
+        "mo":"com|edu|gov|net|org",
+        "mt":"com|edu|gov|net|org",
+        "mv":"aero|biz|com|coop|edu|gov|info|int|mil|museum|name|net|org|pro",
+        "mw":"ac|co|com|coop|edu|gov|int|museum|net|org",
+        "mx":"com|edu|gob|net|org",
+        "my":"com|edu|gov|mil|name|net|org|sch",
+        "nf":"arts|com|firm|info|net|other|per|rec|store|web",
+        "ng":"biz|com|edu|gov|mil|mobi|name|net|org|sch",
+        "ni":"ac|co|com|edu|gob|mil|net|nom|org",
+        "np":"com|edu|gov|mil|net|org",
+        "nr":"biz|com|edu|gov|info|net|org",
+        "om":"ac|biz|co|com|edu|gov|med|mil|museum|net|org|pro|sch",
+        "pe":"com|edu|gob|mil|net|nom|org|sld",
+        "ph":"com|edu|gov|i|mil|net|ngo|org",
+        "pk":"biz|com|edu|fam|gob|gok|gon|gop|gos|gov|net|org|web",
+        "pl":"art|bialystok|biz|com|edu|gda|gdansk|gorzow|gov|info|katowice|krakow|lodz|lublin|mil|net|ngo|olsztyn|org|poznan|pwr|radom|slupsk|szczecin|torun|warszawa|waw|wroc|wroclaw|zgora",
+        "pr":"ac|biz|com|edu|est|gov|info|isla|name|net|org|pro|prof",
+        "ps":"com|edu|gov|net|org|plo|sec",
+        "pw":"belau|co|ed|go|ne|or",
+        "ro":"arts|com|firm|info|nom|nt|org|rec|store|tm|www",
+        "rs":"ac|co|edu|gov|in|org",
+        "sb":"com|edu|gov|net|org",
+        "sc":"com|edu|gov|net|org",
+        "sh":"co|com|edu|gov|net|nom|org",
+        "sl":"com|edu|gov|net|org",
+        "st":"co|com|consulado|edu|embaixada|gov|mil|net|org|principe|saotome|store",
+        "sv":"com|edu|gob|org|red",
+        "sz":"ac|co|org",
+        "tr":"av|bbs|bel|biz|com|dr|edu|gen|gov|info|k12|name|net|org|pol|tel|tsk|tv|web",
+        "tt":"aero|biz|cat|co|com|coop|edu|gov|info|int|jobs|mil|mobi|museum|name|net|org|pro|tel|travel",
+        "tw":"club|com|ebiz|edu|game|gov|idv|mil|net|org",
+        "mu":"ac|co|com|gov|net|or|org",
+        "mz":"ac|co|edu|gov|org",
+        "na":"co|com",
+        "nz":"ac|co|cri|geek|gen|govt|health|iwi|maori|mil|net|org|parliament|school",
+        "pa":"abo|ac|com|edu|gob|ing|med|net|nom|org|sld",
+        "pt":"com|edu|gov|int|net|nome|org|publ",
+        "py":"com|edu|gov|mil|net|org",
+        "qa":"com|edu|gov|mil|net|org",
+        "re":"asso|com|nom",
+        "ru":"ac|adygeya|altai|amur|arkhangelsk|astrakhan|bashkiria|belgorod|bir|bryansk|buryatia|cbg|chel|chelyabinsk|chita|chukotka|chuvashia|com|dagestan|e-burg|edu|gov|grozny|int|irkutsk|ivanovo|izhevsk|jar|joshkar-ola|kalmykia|kaluga|kamchatka|karelia|kazan|kchr|kemerovo|khabarovsk|khakassia|khv|kirov|koenig|komi|kostroma|kranoyarsk|kuban|kurgan|kursk|lipetsk|magadan|mari|mari-el|marine|mil|mordovia|mosreg|msk|murmansk|nalchik|net|nnov|nov|novosibirsk|nsk|omsk|orenburg|org|oryol|penza|perm|pp|pskov|ptz|rnd|ryazan|sakhalin|samara|saratov|simbirsk|smolensk|spb|stavropol|stv|surgut|tambov|tatarstan|tom|tomsk|tsaritsyn|tsk|tula|tuva|tver|tyumen|udm|udmurtia|ulan-ude|vladikavkaz|vladimir|vladivostok|volgograd|vologda|voronezh|vrn|vyatka|yakutia|yamal|yekaterinburg|yuzhno-sakhalinsk",
+        "rw":"ac|co|com|edu|gouv|gov|int|mil|net",
+        "sa":"com|edu|gov|med|net|org|pub|sch",
+        "sd":"com|edu|gov|info|med|net|org|tv",
+        "se":"a|ac|b|bd|c|d|e|f|g|h|i|k|l|m|n|o|org|p|parti|pp|press|r|s|t|tm|u|w|x|y|z",
+        "sg":"com|edu|gov|idn|net|org|per",
+        "sn":"art|com|edu|gouv|org|perso|univ",
+        "sy":"com|edu|gov|mil|net|news|org",
+        "th":"ac|co|go|in|mi|net|or",
+        "tj":"ac|biz|co|com|edu|go|gov|info|int|mil|name|net|nic|org|test|web",
+        "tn":"agrinet|com|defense|edunet|ens|fin|gov|ind|info|intl|mincom|nat|net|org|perso|rnrt|rns|rnu|tourism",
+        "tz":"ac|co|go|ne|or",
+        "ua":"biz|cherkassy|chernigov|chernovtsy|ck|cn|co|com|crimea|cv|dn|dnepropetrovsk|donetsk|dp|edu|gov|if|in|ivano-frankivsk|kh|kharkov|kherson|khmelnitskiy|kiev|kirovograd|km|kr|ks|kv|lg|lugansk|lutsk|lviv|me|mk|net|nikolaev|od|odessa|org|pl|poltava|pp|rovno|rv|sebastopol|sumy|te|ternopil|uzhgorod|vinnica|vn|zaporizhzhe|zhitomir|zp|zt",
+        "ug":"ac|co|go|ne|or|org|sc",
+        "uk":"ac|bl|british-library|co|cym|gov|govt|icnet|jet|lea|ltd|me|mil|mod|national-library-scotland|nel|net|nhs|nic|nls|org|orgn|parliament|plc|police|sch|scot|soc",
+        "us":"dni|fed|isa|kids|nsn",
+        "uy":"com|edu|gub|mil|net|org",
+        "ve":"co|com|edu|gob|info|mil|net|org|web",
+        "vi":"co|com|k12|net|org",
+        "vn":"ac|biz|com|edu|gov|health|info|int|name|net|org|pro",
+        "ye":"co|com|gov|ltd|me|net|org|plc",
+        "yu":"ac|co|edu|gov|org",
+        "za":"ac|agric|alt|bourse|city|co|cybernet|db|edu|gov|grondar|iaccess|imt|inca|landesign|law|mil|net|ngo|nis|nom|olivetti|org|pix|school|tm|web",
+        "zm":"ac|co|com|edu|gov|net|org|sch"
+    },
+    // SLD expression for each TLD
+    //expressions: {},
+    // SLD expression for all TLDs
+    has_expression: null,
+    is_expression: null,
+    // validate domain is a known SLD
+    has: function(domain) {
+        return !!domain.match(SLD.has_expression);
+    },
+    is: function(domain) {
+        return !!domain.match(SLD.is_expression);
+    },
+    get: function(domain) {
+        var t = domain.match(SLD.has_expression);
+        return t && t[1] || null;
+    },
+    init: function() {
+        var t = '';
+        for (var tld in SLD.list) {
+            if (!hasOwn.call(SLD.list, tld)) {
+                continue;
+            }
+
+            var expression = '(' + SLD.list[tld] + ')\.' + tld;
+            //SLD.expressions[tld] = new RegExp('\.' + expression + '$', 'i');
+            t += '|(' + expression + ')';
+        }
+
+        SLD.has_expression = new RegExp('\\.(' + t.substr(1) + ')$', 'i');
+        SLD.is_expression = new RegExp('^(' + t.substr(1) + ')$', 'i');
+    }
+};
+
+SLD.init();
+
+return SLD;
+}));
+/*!
+ * URI.js - Mutating URLs
+ *
+ * Version: 1.8.0
+ *
+ * Author: Rodney Rehm
+ * Web: http://medialize.github.com/URI.js/
+ *
+ * Licensed under
+ *   MIT License http://www.opensource.org/licenses/mit-license
+ *   GPL v3 http://opensource.org/licenses/GPL-3.0
+ *
+ */
+(function (root, factory) {
+    // https://github.com/umdjs/umd/blob/master/returnExports.js
+    if (typeof exports === 'object') {
+        // Node
+        module.exports = factory(require('./punycode'), require('./IPv6'), require('./SecondLevelDomains'));
+    } else if (typeof define === 'function' && define.amd) {
+        // AMD. Register as an anonymous module.
+        define('URIjs/URI',['./punycode', './IPv6', './SecondLevelDomains'], factory);
+    } else {
+        // Browser globals (root is window)
+        root.URI = factory(root.punycode, root.IPv6, root.SecondLevelDomains);
+    }
+}(this, function (punycode, IPv6, SLD) {
+
+
+function URI(url, base) {
+    // Allow instantiation without the 'new' keyword
+    if (!(this instanceof URI)) {
+        return new URI(url, base);
+    }
+
+    if (url === undefined) {
+        if (typeof location !== 'undefined') {
+            url = location.href + "";
+        } else {
+            url = "";
+        }
+    }
+
+    this.href(url);
+
+    // resolve to base according to http://dvcs.w3.org/hg/url/raw-file/tip/Overview.html#constructor
+    if (base !== undefined) {
+        return this.absoluteTo(base);
+    }
+
+    return this;
+};
+
+var p = URI.prototype;
+var hasOwn = Object.prototype.hasOwnProperty;
+
+function escapeRegEx(string) {
+    // https://github.com/medialize/URI.js/commit/85ac21783c11f8ccab06106dba9735a31a86924d#commitcomment-821963
+    return string.replace(/([.*+?^=!:${}()|[\]\/\\])/g, '\\$1');
+}
+
+function isArray(obj) {
+    return String(Object.prototype.toString.call(obj)) === "[object Array]";
+}
+
+function filterArrayValues(data, value) {
+    var lookup = {};
+    var i, length;
+
+    if (isArray(value)) {
+        for (i = 0, length = value.length; i < length; i++) {
+            lookup[value[i]] = true;
+        }
+    } else {
+        lookup[value] = true;
+    }
+
+    for (i = 0, length = data.length; i < length; i++) {
+        if (lookup[data[i]] !== undefined) {
+            data.splice(i, 1);
+            length--;
+            i--;
+        }
+    }
+
+    return data;
+}
+
+// state: allow duplicate query parameters (a=1&a=1)
+URI.duplicateQueryParameters = false;
+// static properties
+URI.protocol_expression = /^[a-z][a-z0-9-+-]*$/i;
+URI.idn_expression = /[^a-z0-9\.-]/i;
+URI.punycode_expression = /(xn--)/i;
+// well, 333.444.555.666 matches, but it sure ain't no IPv4 - do we care?
+URI.ip4_expression = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
+// credits to Rich Brown
+// source: http://forums.intermapper.com/viewtopic.php?p=1096#1096
+// specification: http://www.ietf.org/rfc/rfc4291.txt
+URI.ip6_expression = /^\s*((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4}){0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:)))(%.+)?\s*$/ ;
+// gruber revised expression - http://rodneyrehm.de/t/url-regex.html
+URI.find_uri_expression = /\b((?:[a-z][\w-]+:(?:\/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}\/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?«»“”‘’]))/ig;
+// http://www.iana.org/assignments/uri-schemes.html
+// http://en.wikipedia.org/wiki/List_of_TCP_and_UDP_port_numbers#Well-known_ports
+URI.defaultPorts = {
+    http: "80",
+    https: "443",
+    ftp: "21",
+    gopher: "70",
+    ws: "80",
+    wss: "443"
+};
+// allowed hostname characters according to RFC 3986
+// ALPHA DIGIT "-" "." "_" "~" "!" "$" "&" "'" "(" ")" "*" "+" "," ";" "=" %encoded
+// I've never seen a (non-IDN) hostname other than: ALPHA DIGIT . -
+URI.invalid_hostname_characters = /[^a-zA-Z0-9\.-]/;
+// encoding / decoding according to RFC3986
+function strictEncodeURIComponent(string) {
+    // see https://developer.mozilla.org/en-US/docs/JavaScript/Reference/Global_Objects/encodeURIComponent
+    return encodeURIComponent(string)
+        .replace(/[!'()*]/g, escape)
+        .replace(/\*/g, "%2A");
+}
+URI.encode = strictEncodeURIComponent;
+URI.decode = decodeURIComponent;
+URI.iso8859 = function() {
+    URI.encode = escape;
+    URI.decode = unescape;
+};
+URI.unicode = function() {
+    URI.encode = strictEncodeURIComponent;
+    URI.decode = decodeURIComponent;
+};
+URI.characters = {
+    pathname: {
+        encode: {
+            // RFC3986 2.1: For consistency, URI producers and normalizers should
+            // use uppercase hexadecimal digits for all percent-encodings.
+            expression: /%(24|26|2B|2C|3B|3D|3A|40)/ig,
+            map: {
+                // -._~!'()*
+                "%24": "$",
+                "%26": "&",
+                "%2B": "+",
+                "%2C": ",",
+                "%3B": ";",
+                "%3D": "=",
+                "%3A": ":",
+                "%40": "@"
+            }
+        },
+        decode: {
+            expression: /[\/\?#]/g,
+            map: {
+                "/": "%2F",
+                "?": "%3F",
+                "#": "%23"
+            }
+        }
+    },
+    reserved: {
+        encode: {
+            // RFC3986 2.1: For consistency, URI producers and normalizers should
+            // use uppercase hexadecimal digits for all percent-encodings.
+            expression: /%(21|23|24|26|27|28|29|2A|2B|2C|2F|3A|3B|3D|3F|40|5B|5D)/ig,
+            map: {
+                // gen-delims
+                "%3A": ":",
+                "%2F": "/",
+                "%3F": "?",
+                "%23": "#",
+                "%5B": "[",
+                "%5D": "]",
+                "%40": "@",
+                // sub-delims
+                "%21": "!",
+                "%24": "$",
+                "%26": "&",
+                "%27": "'",
+                "%28": "(",
+                "%29": ")",
+                "%2A": "*",
+                "%2B": "+",
+                "%2C": ",",
+                "%3B": ";",
+                "%3D": "="
+            }
+        }
+    }
+};
+URI.encodeQuery = function(string) {
+    return URI.encode(string + "").replace(/%20/g, '+');
+};
+URI.decodeQuery = function(string) {
+    return URI.decode((string + "").replace(/\+/g, '%20'));
+};
+URI.recodePath = function(string) {
+    var segments = (string + "").split('/');
+    for (var i = 0, length = segments.length; i < length; i++) {
+        segments[i] = URI.encodePathSegment(URI.decode(segments[i]));
+    }
+
+    return segments.join('/');
+};
+URI.decodePath = function(string) {
+    var segments = (string + "").split('/');
+    for (var i = 0, length = segments.length; i < length; i++) {
+        segments[i] = URI.decodePathSegment(segments[i]);
+    }
+
+    return segments.join('/');
+};
+// generate encode/decode path functions
+var _parts = {'encode':'encode', 'decode':'decode'};
+var _part;
+var generateAccessor = function(_group, _part) {
+    return function(string) {
+        return URI[_part](string + "").replace(URI.characters[_group][_part].expression, function(c) {
+            return URI.characters[_group][_part].map[c];
+        });
+    };
+};
+
+for (_part in _parts) {
+    URI[_part + "PathSegment"] = generateAccessor("pathname", _parts[_part]);
+}
+
+URI.encodeReserved = generateAccessor("reserved", "encode");
+
+URI.parse = function(string, parts) {
+    var pos, t;
+    if (!parts) {
+        parts = {};
+    }
+    // [protocol"://"[username[":"password]"@"]hostname[":"port]"/"?][path]["?"querystring]["#"fragment]
+
+    // extract fragment
+    pos = string.indexOf('#');
+    if (pos > -1) {
+        // escaping?
+        parts.fragment = string.substring(pos + 1) || null;
+        string = string.substring(0, pos);
+    }
+
+    // extract query
+    pos = string.indexOf('?');
+    if (pos > -1) {
+        // escaping?
+        parts.query = string.substring(pos + 1) || null;
+        string = string.substring(0, pos);
+    }
+
+    // extract protocol
+    if (string.substring(0, 2) === '//') {
+        // relative-scheme
+        parts.protocol = '';
+        string = string.substring(2);
+        // extract "user:pass@host:port"
+        string = URI.parseAuthority(string, parts);
+    } else {
+        pos = string.indexOf(':');
+        if (pos > -1) {
+            parts.protocol = string.substring(0, pos);
+            if (parts.protocol && !parts.protocol.match(URI.protocol_expression)) {
+                // : may be within the path
+                parts.protocol = undefined;
+            } else if (parts.protocol === 'file') {
+                // the file scheme: does not contain an authority
+                string = string.substring(pos + 3);
+            } else if (string.substring(pos + 1, pos + 3) === '//') {
+                string = string.substring(pos + 3);
+
+                // extract "user:pass@host:port"
+                string = URI.parseAuthority(string, parts);
+            } else {
+                string = string.substring(pos + 1);
+                parts.urn = true;
+            }
+        }
+    }
+
+    // what's left must be the path
+    parts.path = string;
+
+    // and we're done
+    return parts;
+};
+URI.parseHost = function(string, parts) {
+    // extract host:port
+    var pos = string.indexOf('/');
+    var bracketPos;
+    var t;
+
+    if (pos === -1) {
+        pos = string.length;
+    }
+
+    if (string[0] === "[") {
+        // IPv6 host - http://tools.ietf.org/html/draft-ietf-6man-text-addr-representation-04#section-6
+        // I claim most client software breaks on IPv6 anyways. To simplify things, URI only accepts
+        // IPv6+port in the format [2001:db8::1]:80 (for the time being)
+        bracketPos = string.indexOf(']');
+        parts.hostname = string.substring(1, bracketPos) || null;
+        parts.port = string.substring(bracketPos+2, pos) || null;
+    } else if (string.indexOf(':') !== string.lastIndexOf(':')) {
+        // IPv6 host contains multiple colons - but no port
+        // this notation is actually not allowed by RFC 3986, but we're a liberal parser
+        parts.hostname = string.substring(0, pos) || null;
+        parts.port = null;
+    } else {
+        t = string.substring(0, pos).split(':');
+        parts.hostname = t[0] || null;
+        parts.port = t[1] || null;
+    }
+
+    if (parts.hostname && string.substring(pos)[0] !== '/') {
+        pos++;
+        string = "/" + string;
+    }
+
+    return string.substring(pos) || '/';
+};
+URI.parseAuthority = function(string, parts) {
+    string = URI.parseUserinfo(string, parts);
+    return URI.parseHost(string, parts);
+};
+URI.parseUserinfo = function(string, parts) {
+    // extract username:password
+    var pos = string.indexOf('@');
+    var firstSlash = string.indexOf('/');
+    var t;
+
+    // authority@ must come before /path
+    if (pos > -1 && (firstSlash === -1 || pos < firstSlash)) {
+        t = string.substring(0, pos).split(':');
+        parts.username = t[0] ? URI.decode(t[0]) : null;
+        t.shift();
+        parts.password = t[0] ? URI.decode(t.join(':')) : null;
+        string = string.substring(pos + 1);
+    } else {
+        parts.username = null;
+        parts.password = null;
+    }
+
+    return string;
+};
+URI.parseQuery = function(string) {
+    if (!string) {
+        return {};
+    }
+
+    // throw out the funky business - "?"[name"="value"&"]+
+    string = string.replace(/&+/g, '&').replace(/^\?*&*|&+$/g, '');
+
+    if (!string) {
+        return {};
+    }
+
+    var items = {};
+    var splits = string.split('&');
+    var length = splits.length;
+    var v, name, value;
+
+    for (var i = 0; i < length; i++) {
+        v = splits[i].split('=');
+        name = URI.decodeQuery(v.shift());
+        // no "=" is null according to http://dvcs.w3.org/hg/url/raw-file/tip/Overview.html#collect-url-parameters
+        value = v.length ? URI.decodeQuery(v.join('=')) : null;
+
+        if (items[name]) {
+            if (typeof items[name] === "string") {
+                items[name] = [items[name]];
+            }
+
+            items[name].push(value);
+        } else {
+            items[name] = value;
+        }
+    }
+
+    return items;
+};
+
+URI.build = function(parts) {
+    var t = "";
+
+    if (parts.protocol) {
+        t += parts.protocol + ":";
+    }
+
+    if (!parts.urn && (t || parts.hostname)) {
+        t += '//';
+    }
+
+    t += (URI.buildAuthority(parts) || '');
+
+    if (typeof parts.path === "string") {
+        if (parts.path[0] !== '/' && typeof parts.hostname === "string") {
+            t += '/';
+        }
+
+        t += parts.path;
+    }
+
+    if (typeof parts.query === "string") {
+        t += '?' + parts.query;
+    }
+
+    if (typeof parts.fragment === "string") {
+        t += '#' + parts.fragment;
+    }
+    return t;
+};
+URI.buildHost = function(parts) {
+    var t = "";
+
+    if (!parts.hostname) {
+        return "";
+    } else if (URI.ip6_expression.test(parts.hostname)) {
+        if (parts.port) {
+            t += "[" + parts.hostname + "]:" + parts.port;
+        } else {
+            // don't know if we should always wrap IPv6 in []
+            // the RFC explicitly says SHOULD, not MUST.
+            t += parts.hostname;
+        }
+    } else {
+        t += parts.hostname;
+        if (parts.port) {
+            t += ':' + parts.port;
+        }
+    }
+
+    return t;
+};
+URI.buildAuthority = function(parts) {
+    return URI.buildUserinfo(parts) + URI.buildHost(parts);
+};
+URI.buildUserinfo = function(parts) {
+    var t = "";
+
+    if (parts.username) {
+        t += URI.encode(parts.username);
+
+        if (parts.password) {
+            t += ':' + URI.encode(parts.password);
+        }
+
+        t += "@";
+    }
+
+    return t;
+};
+URI.buildQuery = function(data, duplicates) {
+    // according to http://tools.ietf.org/html/rfc3986 or http://labs.apache.org/webarch/uri/rfc/rfc3986.html
+    // being »-._~!$&'()*+,;=:@/?« %HEX and alnum are allowed
+    // the RFC explicitly states ?/foo being a valid use case, no mention of parameter syntax!
+    // URI.js treats the query string as being application/x-www-form-urlencoded
+    // see http://www.w3.org/TR/REC-html40/interact/forms.html#form-content-type
+
+    var t = "";
+    var unique, key, i, length;
+    for (key in data) {
+        if (hasOwn.call(data, key) && key) {
+            if (isArray(data[key])) {
+                unique = {};
+                for (i = 0, length = data[key].length; i < length; i++) {
+                    if (data[key][i] !== undefined && unique[data[key][i] + ""] === undefined) {
+                        t += "&" + URI.buildQueryParameter(key, data[key][i]);
+                        if (duplicates !== true) {
+                            unique[data[key][i] + ""] = true;
+                        }
+                    }
+                }
+            } else if (data[key] !== undefined) {
+                t += '&' + URI.buildQueryParameter(key, data[key]);
+            }
+        }
+    }
+
+    return t.substring(1);
+};
+URI.buildQueryParameter = function(name, value) {
+    // http://www.w3.org/TR/REC-html40/interact/forms.html#form-content-type -- application/x-www-form-urlencoded
+    // don't append "=" for null values, according to http://dvcs.w3.org/hg/url/raw-file/tip/Overview.html#url-parameter-serialization
+    return URI.encodeQuery(name) + (value !== null ? "=" + URI.encodeQuery(value) : "");
+};
+
+URI.addQuery = function(data, name, value) {
+    if (typeof name === "object") {
+        for (var key in name) {
+            if (hasOwn.call(name, key)) {
+                URI.addQuery(data, key, name[key]);
+            }
+        }
+    } else if (typeof name === "string") {
+        if (data[name] === undefined) {
+            data[name] = value;
+            return;
+        } else if (typeof data[name] === "string") {
+            data[name] = [data[name]];
+        }
+
+        if (!isArray(value)) {
+            value = [value];
+        }
+
+        data[name] = data[name].concat(value);
+    } else {
+        throw new TypeError("URI.addQuery() accepts an object, string as the name parameter");
+    }
+};
+URI.removeQuery = function(data, name, value) {
+    var i, length, key;
+    
+    if (isArray(name)) {
+        for (i = 0, length = name.length; i < length; i++) {
+            data[name[i]] = undefined;
+        }
+    } else if (typeof name === "object") {
+        for (key in name) {
+            if (hasOwn.call(name, key)) {
+                URI.removeQuery(data, key, name[key]);
+            }
+        }
+    } else if (typeof name === "string") {
+        if (value !== undefined) {
+            if (data[name] === value) {
+                data[name] = undefined;
+            } else if (isArray(data[name])) {
+                data[name] = filterArrayValues(data[name], value);
+            }
+        } else {
+            data[name] = undefined;
+        }
+    } else {
+        throw new TypeError("URI.addQuery() accepts an object, string as the first parameter");
+    }
+};
+
+URI.commonPath = function(one, two) {
+    var length = Math.min(one.length, two.length);
+    var pos;
+
+    // find first non-matching character
+    for (pos = 0; pos < length; pos++) {
+        if (one[pos] !== two[pos]) {
+            pos--;
+            break;
+        }
+    }
+
+    if (pos < 1) {
+        return one[0] === two[0] && one[0] === '/' ? '/' : '';
+    }
+
+    // revert to last /
+    if (one[pos] !== '/') {
+        pos = one.substring(0, pos).lastIndexOf('/');
+    }
+
+    return one.substring(0, pos + 1);
+};
+
+URI.withinString = function(string, callback) {
+    // expression used is "gruber revised" (@gruber v2) determined to be the best solution in
+    // a regex sprint we did a couple of ages ago at
+    // * http://mathiasbynens.be/demo/url-regex
+    // * http://rodneyrehm.de/t/url-regex.html
+
+    return string.replace(URI.find_uri_expression, callback);
+};
+
+URI.ensureValidHostname = function(v) {
+    // Theoretically URIs allow percent-encoding in Hostnames (according to RFC 3986)
+    // they are not part of DNS and therefore ignored by URI.js
+
+    if (v.match(URI.invalid_hostname_characters)) {
+        // test punycode
+        if (!punycode) {
+            throw new TypeError("Hostname '" + v + "' contains characters other than [A-Z0-9.-] and Punycode.js is not available");
+        }
+
+        if (punycode.toASCII(v).match(URI.invalid_hostname_characters)) {
+            throw new TypeError("Hostname '" + v + "' contains characters other than [A-Z0-9.-]");
+        }
+    }
+};
+
+p.build = function(deferBuild) {
+    if (deferBuild === true) {
+        this._deferred_build = true;
+    } else if (deferBuild === undefined || this._deferred_build) {
+        this._string = URI.build(this._parts);
+        this._deferred_build = false;
+    }
+
+    return this;
+};
+
+p.clone = function() {
+    return new URI(this);
+};
+
+p.toString = function() {
+    return this.build(false)._string;
+};
+p.valueOf = function() {
+    return this.toString();
+};
+
+// generate simple accessors
+_parts = {protocol: 'protocol', username: 'username', password: 'password', hostname: 'hostname',  port: 'port'};
+generateAccessor = function(_part){
+    return function(v, build) {
+        if (v === undefined) {
+            return this._parts[_part] || "";
+        } else {
+            this._parts[_part] = v;
+            this.build(!build);
+            return this;
+        }
+    };
+};
+
+for (_part in _parts) {
+    p[_part] = generateAccessor(_parts[_part]);
+}
+
+// generate accessors with optionally prefixed input
+_parts = {query: '?', fragment: '#'};
+generateAccessor = function(_part, _key){
+    return function(v, build) {
+        if (v === undefined) {
+            return this._parts[_part] || "";
+        } else {
+            if (v !== null) {
+                v = v + "";
+                if (v[0] === _key) {
+                    v = v.substring(1);
+                }
+            }
+
+            this._parts[_part] = v;
+            this.build(!build);
+            return this;
+        }
+    };
+};
+
+for (_part in _parts) {
+    p[_part] = generateAccessor(_part, _parts[_part]);
+}
+
+// generate accessors with prefixed output
+_parts = {search: ['?', 'query'], hash: ['#', 'fragment']};
+generateAccessor = function(_part, _key){
+    return function(v, build) {
+        var t = this[_part](v, build);
+        return typeof t === "string" && t.length ? (_key + t) : t;
+    };
+};
+
+for (_part in _parts) {
+    p[_part] = generateAccessor(_parts[_part][1], _parts[_part][0]);
+}
+
+p.pathname = function(v, build) {
+    if (v === undefined || v === true) {
+        var res = this._parts.path || (this._parts.urn ? '' : '/');
+        return v ? URI.decodePath(res) : res;
+    } else {
+        this._parts.path = v ? URI.recodePath(v) : "/";
+        this.build(!build);
+        return this;
+    }
+};
+p.path = p.pathname;
+p.href = function(href, build) {
+    if (href === undefined) {
+        return this.toString();
+    }
+
+    this._string = "";
+    this._parts = {
+        protocol: null,
+        username: null,
+        password: null,
+        hostname: null,
+        urn: null,
+        port: null,
+        path: null,
+        query: null,
+        fragment: null,
+        // state
+        duplicateQueryParameters: URI.duplicateQueryParameters
+    };
+
+    var _URI = href instanceof URI;
+    var _object = typeof href === "object" && (href.hostname || href.path);
+    var key;
+    
+    // window.location is reported to be an object, but it's not the sort
+    // of object we're looking for: 
+    // * location.protocol ends with a colon
+    // * location.query != object.search
+    // * location.hash != object.fragment
+    // simply serializing the unknown object should do the trick 
+    // (for location, not for everything...)
+    if (!_URI && _object && Object.prototype.toString.call(href) !== "[object Object]") {
+        href = href.toString();
+    }
+
+    if (typeof href === "string") {
+        this._parts = URI.parse(href, this._parts);
+    } else if (_URI || _object) {
+        var src = _URI ? href._parts : href;
+        for (key in src) {
+            if (hasOwn.call(this._parts, key)) {
+                this._parts[key] = src[key];
+            }
+        }
+    } else {
+        throw new TypeError("invalid input");
+    }
+
+    this.build(!build);
+    return this;
+};
+
+// identification accessors
+p.is = function(what) {
+    var ip = false;
+    var ip4 = false;
+    var ip6 = false;
+    var name = false;
+    var sld = false;
+    var idn = false;
+    var punycode = false;
+    var relative = !this._parts.urn;
+
+    if (this._parts.hostname) {
+        relative = false;
+        ip4 = URI.ip4_expression.test(this._parts.hostname);
+        ip6 = URI.ip6_expression.test(this._parts.hostname);
+        ip = ip4 || ip6;
+        name = !ip;
+        sld = name && SLD && SLD.has(this._parts.hostname);
+        idn = name && URI.idn_expression.test(this._parts.hostname);
+        punycode = name && URI.punycode_expression.test(this._parts.hostname);
+    }
+
+    switch (what.toLowerCase()) {
+        case 'relative':
+            return relative;
+
+        case 'absolute':
+            return !relative;
+
+        // hostname identification
+        case 'domain':
+        case 'name':
+            return name;
+
+        case 'sld':
+            return sld;
+
+        case 'ip':
+            return ip;
+
+        case 'ip4':
+        case 'ipv4':
+        case 'inet4':
+            return ip4;
+
+        case 'ip6':
+        case 'ipv6':
+        case 'inet6':
+            return ip6;
+
+        case 'idn':
+            return idn;
+
+        case 'url':
+            return !this._parts.urn;
+
+        case 'urn':
+            return !!this._parts.urn;
+
+        case 'punycode':
+            return punycode;
+    }
+
+    return null;
+};
+
+// component specific input validation
+var _protocol = p.protocol;
+var _port = p.port;
+var _hostname = p.hostname;
+
+p.protocol = function(v, build) {
+    if (v !== undefined) {
+        if (v) {
+            // accept trailing ://
+            v = v.replace(/:(\/\/)?$/, '');
+
+            if (v.match(/[^a-zA-z0-9\.+-]/)) {
+                throw new TypeError("Protocol '" + v + "' contains characters other than [A-Z0-9.+-]");
+            }
+        }
+    }
+    return _protocol.call(this, v, build);
+};
+p.scheme = p.protocol;
+p.port = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v !== undefined) {
+        if (v === 0) {
+            v = null;
+        }
+
+        if (v) {
+            v += "";
+            if (v[0] === ":") {
+                v = v.substring(1);
+            }
+
+            if (v.match(/[^0-9]/)) {
+                throw new TypeError("Port '" + v + "' contains characters other than [0-9]");
+            }
+        }
+    }
+    return _port.call(this, v, build);
+};
+p.hostname = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v !== undefined) {
+        var x = {};
+        URI.parseHost(v, x);
+        v = x.hostname;
+    }
+    return _hostname.call(this, v, build);
+};
+
+// compound accessors
+p.host = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v === undefined) {
+        return this._parts.hostname ? URI.buildHost(this._parts) : "";
+    } else {
+        URI.parseHost(v, this._parts);
+        this.build(!build);
+        return this;
+    }
+};
+p.authority = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v === undefined) {
+        return this._parts.hostname ? URI.buildAuthority(this._parts) : "";
+    } else {
+        URI.parseAuthority(v, this._parts);
+        this.build(!build);
+        return this;
+    }
+};
+p.userinfo = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v === undefined) {
+        if (!this._parts.username) {
+            return "";
+        }
+
+        var t = URI.buildUserinfo(this._parts);
+        return t.substring(0, t.length -1);
+    } else {
+        if (v[v.length-1] !== '@') {
+            v += '@';
+        }
+
+        URI.parseUserinfo(v, this._parts);
+        this.build(!build);
+        return this;
+    }
+};
+p.resource = function(v, build) {
+    var parts;
+    
+    if (v === undefined) {
+        return this.path() + this.search() + this.hash();
+    }
+    
+    parts = URI.parse(v);
+    this._parts.path = parts.path;
+    this._parts.query = parts.query;
+    this._parts.fragment = parts.fragment;
+    this.build(!build);
+    return this;
+};
+
+// fraction accessors
+p.subdomain = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    // convenience, return "www" from "www.example.org"
+    if (v === undefined) {
+        if (!this._parts.hostname || this.is('IP')) {
+            return "";
+        }
+
+        // grab domain and add another segment
+        var end = this._parts.hostname.length - this.domain().length - 1;
+        return this._parts.hostname.substring(0, end) || "";
+    } else {
+        var e = this._parts.hostname.length - this.domain().length;
+        var sub = this._parts.hostname.substring(0, e);
+        var replace = new RegExp('^' + escapeRegEx(sub));
+
+        if (v && v[v.length - 1] !== '.') {
+            v += ".";
+        }
+
+        if (v) {
+            URI.ensureValidHostname(v);
+        }
+
+        this._parts.hostname = this._parts.hostname.replace(replace, v);
+        this.build(!build);
+        return this;
+    }
+};
+p.domain = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (typeof v === 'boolean') {
+        build = v;
+        v = undefined;
+    }
+
+    // convenience, return "example.org" from "www.example.org"
+    if (v === undefined) {
+        if (!this._parts.hostname || this.is('IP')) {
+            return "";
+        }
+
+        // if hostname consists of 1 or 2 segments, it must be the domain
+        var t = this._parts.hostname.match(/\./g);
+        if (t && t.length < 2) {
+            return this._parts.hostname;
+        }
+
+        // grab tld and add another segment
+        var end = this._parts.hostname.length - this.tld(build).length - 1;
+        end = this._parts.hostname.lastIndexOf('.', end -1) + 1;
+        return this._parts.hostname.substring(end) || "";
+    } else {
+        if (!v) {
+            throw new TypeError("cannot set domain empty");
+        }
+
+        URI.ensureValidHostname(v);
+
+        if (!this._parts.hostname || this.is('IP')) {
+            this._parts.hostname = v;
+        } else {
+            var replace = new RegExp(escapeRegEx(this.domain()) + "$");
+            this._parts.hostname = this._parts.hostname.replace(replace, v);
+        }
+
+        this.build(!build);
+        return this;
+    }
+};
+p.tld = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (typeof v === 'boolean') {
+        build = v;
+        v = undefined;
+    }
+
+    // return "org" from "www.example.org"
+    if (v === undefined) {
+        if (!this._parts.hostname || this.is('IP')) {
+            return "";
+        }
+
+        var pos = this._parts.hostname.lastIndexOf('.');
+        var tld = this._parts.hostname.substring(pos + 1);
+
+        if (build !== true && SLD && SLD.list[tld.toLowerCase()]) {
+            return SLD.get(this._parts.hostname) || tld;
+        }
+
+        return tld;
+    } else {
+        var replace;
+        
+        if (!v) {
+            throw new TypeError("cannot set TLD empty");
+        } else if (v.match(/[^a-zA-Z0-9-]/)) {
+            if (SLD && SLD.is(v)) {
+                replace = new RegExp(escapeRegEx(this.tld()) + "$");
+                this._parts.hostname = this._parts.hostname.replace(replace, v);
+            } else {
+                throw new TypeError("TLD '" + v + "' contains characters other than [A-Z0-9]");
+            }
+        } else if (!this._parts.hostname || this.is('IP')) {
+            throw new ReferenceError("cannot set TLD on non-domain host");
+        } else {
+            replace = new RegExp(escapeRegEx(this.tld()) + "$");
+            this._parts.hostname = this._parts.hostname.replace(replace, v);
+        }
+
+        this.build(!build);
+        return this;
+    }
+};
+p.directory = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v === undefined || v === true) {
+        if (!this._parts.path && !this._parts.hostname) {
+            return '';
+        }
+
+        if (this._parts.path === '/') {
+            return '/';
+        }
+
+        var end = this._parts.path.length - this.filename().length - 1;
+        var res = this._parts.path.substring(0, end) || (this._parts.hostname ? "/" : "");
+
+        return v ? URI.decodePath(res) : res;
+
+    } else {
+        var e = this._parts.path.length - this.filename().length;
+        var directory = this._parts.path.substring(0, e);
+        var replace = new RegExp('^' + escapeRegEx(directory));
+
+        // fully qualifier directories begin with a slash
+        if (!this.is('relative')) {
+            if (!v) {
+                v = '/';
+            }
+
+            if (v[0] !== '/') {
+                v = "/" + v;
+            }
+        }
+
+        // directories always end with a slash
+        if (v && v[v.length - 1] !== '/') {
+            v += '/';
+        }
+
+        v = URI.recodePath(v);
+        this._parts.path = this._parts.path.replace(replace, v);
+        this.build(!build);
+        return this;
+    }
+};
+p.filename = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v === undefined || v === true) {
+        if (!this._parts.path || this._parts.path === '/') {
+            return "";
+        }
+
+        var pos = this._parts.path.lastIndexOf('/');
+        var res = this._parts.path.substring(pos+1);
+
+        return v ? URI.decodePathSegment(res) : res;
+    } else {
+        var mutatedDirectory = false;
+        
+        if (v[0] === '/') {
+            v = v.substring(1);
+        }
+
+        if (v.match(/\.?\//)) {
+            mutatedDirectory = true;
+        }
+
+        var replace = new RegExp(escapeRegEx(this.filename()) + "$");
+        v = URI.recodePath(v);
+        this._parts.path = this._parts.path.replace(replace, v);
+
+        if (mutatedDirectory) {
+            this.normalizePath(build);
+        } else {
+            this.build(!build);
+        }
+
+        return this;
+    }
+};
+p.suffix = function(v, build) {
+    if (this._parts.urn) {
+        return v === undefined ? '' : this;
+    }
+
+    if (v === undefined || v === true) {
+        if (!this._parts.path || this._parts.path === '/') {
+            return "";
+        }
+
+        var filename = this.filename();
+        var pos = filename.lastIndexOf('.');
+        var s, res;
+
+        if (pos === -1) {
+            return "";
+        }
+
+        // suffix may only contain alnum characters (yup, I made this up.)
+        s = filename.substring(pos+1);
+        res = (/^[a-z0-9%]+$/i).test(s) ? s : "";
+        return v ? URI.decodePathSegment(res) : res;
+    } else {
+        if (v[0] === '.') {
+            v = v.substring(1);
+        }
+
+        var suffix = this.suffix();
+        var replace;
+
+        if (!suffix) {
+            if (!v) {
+                return this;
+            }
+
+            this._parts.path += '.' + URI.recodePath(v);
+        } else if (!v) {
+            replace = new RegExp(escapeRegEx("." + suffix) + "$");
+        } else {
+            replace = new RegExp(escapeRegEx(suffix) + "$");
+        }
+
+        if (replace) {
+            v = URI.recodePath(v);
+            this._parts.path = this._parts.path.replace(replace, v);
+        }
+
+        this.build(!build);
+        return this;
+    }
+};
+p.segment = function(segment, v, build) {
+    var separator = this._parts.urn ? ':' : '/';
+    var path = this.path();
+    var absolute = path.substring(0, 1) === '/';
+    var segments = path.split(separator);
+
+    if (typeof segment !== 'number') {
+        build = v;
+        v = segment;
+        segment = undefined;
+    }
+
+    if (segment !== undefined && typeof segment !== 'number') {
+        throw new Error("Bad segment '" + segment + "', must be 0-based integer");
+    }
+
+    if (absolute) {
+        segments.shift();
+    }
+
+    if (segment < 0) {
+        // allow negative indexes to address from the end
+        segment = Math.max(segments.length + segment, 0);
+    }
+
+    if (v === undefined) {
+        return segment === undefined
+            ? segments
+            : segments[segment];
+    } else if (segment === null || segments[segment] === undefined) {
+        if (isArray(v)) {
+            segments = v;
+        } else if (v || (typeof v === "string" && v.length)) {
+            if (segments[segments.length -1] === "") {
+                // empty trailing elements have to be overwritten
+                // to prefent results such as /foo//bar
+                segments[segments.length -1] = v;
+            } else {
+                segments.push(v);
+            }
+        }
+    } else {
+        if (v || (typeof v === "string" && v.length)) {
+            segments[segment] = v;
+        } else {
+            segments.splice(segment, 1);
+        }
+    }
+
+    if (absolute) {
+        segments.unshift("");
+    }
+
+    return this.path(segments.join(separator), build);
+};
+
+// mutating query string
+var q = p.query;
+p.query = function(v, build) {
+    if (v === true) {
+        return URI.parseQuery(this._parts.query);
+    } else if (v !== undefined && typeof v !== "string") {
+        this._parts.query = URI.buildQuery(v, this._parts.duplicateQueryParameters);
+        this.build(!build);
+        return this;
+    } else {
+        return q.call(this, v, build);
+    }
+};
+p.addQuery = function(name, value, build) {
+    var data = URI.parseQuery(this._parts.query);
+    URI.addQuery(data, name, value === undefined ? null : value);
+    this._parts.query = URI.buildQuery(data, this._parts.duplicateQueryParameters);
+    if (typeof name !== "string") {
+        build = value;
+    }
+
+    this.build(!build);
+    return this;
+};
+p.removeQuery = function(name, value, build) {
+    var data = URI.parseQuery(this._parts.query);
+    URI.removeQuery(data, name, value);
+    this._parts.query = URI.buildQuery(data, this._parts.duplicateQueryParameters);
+    if (typeof name !== "string") {
+        build = value;
+    }
+
+    this.build(!build);
+    return this;
+};
+p.addSearch = p.addQuery;
+p.removeSearch = p.removeQuery;
+
+// sanitizing URLs
+p.normalize = function() {
+    if (this._parts.urn) {
+        return this
+            .normalizeProtocol(false)
+            .normalizeQuery(false)
+            .normalizeFragment(false)
+            .build();
+    }
+
+    return this
+        .normalizeProtocol(false)
+        .normalizeHostname(false)
+        .normalizePort(false)
+        .normalizePath(false)
+        .normalizeQuery(false)
+        .normalizeFragment(false)
+        .build();
+};
+p.normalizeProtocol = function(build) {
+    if (typeof this._parts.protocol === "string") {
+        this._parts.protocol = this._parts.protocol.toLowerCase();
+        this.build(!build);
+    }
+
+    return this;
+};
+p.normalizeHostname = function(build) {
+    if (this._parts.hostname) {
+        if (this.is('IDN') && punycode) {
+            this._parts.hostname = punycode.toASCII(this._parts.hostname);
+        } else if (this.is('IPv6') && IPv6) {
+            this._parts.hostname = IPv6.best(this._parts.hostname);
+        }
+
+        this._parts.hostname = this._parts.hostname.toLowerCase();
+        this.build(!build);
+    }
+
+    return this;
+};
+p.normalizePort = function(build) {
+    // remove port of it's the protocol's default
+    if (typeof this._parts.protocol === "string" && this._parts.port === URI.defaultPorts[this._parts.protocol]) {
+        this._parts.port = null;
+        this.build(!build);
+    }
+
+    return this;
+};
+p.normalizePath = function(build) {
+    if (this._parts.urn) {
+        return this;
+    }
+
+    if (!this._parts.path || this._parts.path === '/') {
+        return this;
+    }
+
+    var _was_relative;
+    var _was_relative_prefix;
+    var _path = this._parts.path;
+    var _parent, _pos;
+
+    // handle relative paths
+    if (_path[0] !== '/') {
+        if (_path[0] === '.') {
+            _was_relative_prefix = _path.substring(0, _path.indexOf('/'));
+        }
+        _was_relative = true;
+        _path = '/' + _path;
+    }
+    // resolve simples
+    _path = _path.replace(/(\/(\.\/)+)|\/{2,}/g, '/');
+    // resolve parents
+    while (true) {
+        _parent = _path.indexOf('/../');
+        if (_parent === -1) {
+            // no more ../ to resolve
+            break;
+        } else if (_parent === 0) {
+            // top level cannot be relative...
+            _path = _path.substring(3);
+            break;
+        }
+
+        _pos = _path.substring(0, _parent).lastIndexOf('/');
+        if (_pos === -1) {
+            _pos = _parent;
+        }
+        _path = _path.substring(0, _pos) + _path.substring(_parent + 3);
+    }
+    // revert to relative
+    if (_was_relative && this.is('relative')) {
+        if (_was_relative_prefix){
+            _path = _was_relative_prefix + _path;
+        } else {
+            _path = _path.substring(1);
+        }
+    }
+
+    _path = URI.recodePath(_path);
+    this._parts.path = _path;
+    this.build(!build);
+    return this;
+};
+p.normalizePathname = p.normalizePath;
+p.normalizeQuery = function(build) {
+    if (typeof this._parts.query === "string") {
+        if (!this._parts.query.length) {
+            this._parts.query = null;
+        } else {
+            this.query(URI.parseQuery(this._parts.query));
+        }
+
+        this.build(!build);
+    }
+
+    return this;
+};
+p.normalizeFragment = function(build) {
+    if (!this._parts.fragment) {
+        this._parts.fragment = null;
+        this.build(!build);
+    }
+
+    return this;
+};
+p.normalizeSearch = p.normalizeQuery;
+p.normalizeHash = p.normalizeFragment;
+
+p.iso8859 = function() {
+    // expect unicode input, iso8859 output
+    var e = URI.encode;
+    var d = URI.decode;
+
+    URI.encode = escape;
+    URI.decode = decodeURIComponent;
+    this.normalize();
+    URI.encode = e;
+    URI.decode = d;
+    return this;
+};
+
+p.unicode = function() {
+    // expect iso8859 input, unicode output
+    var e = URI.encode;
+    var d = URI.decode;
+
+    URI.encode = strictEncodeURIComponent;
+    URI.decode = unescape;
+    this.normalize();
+    URI.encode = e;
+    URI.decode = d;
+    return this;
+};
+
+p.readable = function() {
+    var uri = this.clone();
+    // removing username, password, because they shouldn't be displayed according to RFC 3986
+    uri.username("").password("").normalize();
+    var t = '';
+    if (uri._parts.protocol) {
+        t += uri._parts.protocol + '://';
+    }
+
+    if (uri._parts.hostname) {
+        if (uri.is('punycode') && punycode) {
+            t += punycode.toUnicode(uri._parts.hostname);
+            if (uri._parts.port) {
+                t += ":" + uri._parts.port;
+            }
+        } else {
+            t += uri.host();
+        }
+    }
+
+    if (uri._parts.hostname && uri._parts.path && uri._parts.path[0] !== '/') {
+        t += '/';
+    }
+
+    t += uri.path(true);
+    if (uri._parts.query) {
+        var q = '';
+        for (var i = 0, qp = uri._parts.query.split('&'), l = qp.length; i < l; i++) {
+            var kv = (qp[i] || "").split('=');
+            q += '&' + URI.decodeQuery(kv[0])
+                .replace(/&/g, '%26');
+
+            if (kv[1] !== undefined) {
+                q += "=" + URI.decodeQuery(kv[1])
+                    .replace(/&/g, '%26');
+            }
+        }
+        t += '?' + q.substring(1);
+    }
+
+    t += uri.hash();
+    return t;
+};
+
+// resolving relative and absolute URLs
+p.absoluteTo = function(base) {
+    var resolved = this.clone();
+    var properties = ['protocol', 'username', 'password', 'hostname', 'port'];
+    var basedir, i, p;
+
+    if (this._parts.urn) {
+        throw new Error('URNs do not have any generally defined hierachical components');
+    }
+
+    if (this._parts.hostname) {
+        return resolved;
+    }
+
+    if (!(base instanceof URI)) {
+        base = new URI(base);
+    }
+
+    for (i = 0, p; p = properties[i]; i++) {
+        resolved._parts[p] = base._parts[p];
+    }
+    
+    properties = ['query', 'path'];
+    for (i = 0, p; p = properties[i]; i++) {
+        if (!resolved._parts[p] && base._parts[p]) {
+            resolved._parts[p] = base._parts[p];
+        }
+    }
+
+    if (resolved.path()[0] !== '/') {
+        basedir = base.directory();
+        resolved._parts.path = (basedir ? (basedir + '/') : '') + resolved._parts.path;
+        resolved.normalizePath();
+    }
+
+    resolved.build();
+    return resolved;
+};
+p.relativeTo = function(base) {
+    var relative = this.clone();
+    var properties = ['protocol', 'username', 'password', 'hostname', 'port'];
+    var common, _base;
+
+    if (this._parts.urn) {
+        throw new Error('URNs do not have any generally defined hierachical components');
+    }
+
+    if (!(base instanceof URI)) {
+        base = new URI(base);
+    }
+
+    if (this.path()[0] !== '/' || base.path()[0] !== '/') {
+        throw new Error('Cannot calculate common path from non-relative URLs');
+    }
+
+    common = URI.commonPath(relative.path(), base.path());
+    _base = base.directory();
+
+    for (var i = 0, p; p = properties[i]; i++) {
+        relative._parts[p] = null;
+    }
+
+    if (!common || common === '/') {
+        return relative;
+    }
+
+    if (_base + '/' === common) {
+        relative._parts.path = './' + relative.filename();
+    } else {
+        var parents = '../';
+        var _common = new RegExp('^' + escapeRegEx(common));
+        var _parents = _base.replace(_common, '/').match(/\//g).length -1;
+
+        while (_parents--) {
+            parents += '../';
+        }
+
+        relative._parts.path = relative._parts.path.replace(_common, parents);
+    }
+
+    relative.build();
+    return relative;
+};
+
+// comparing URIs
+p.equals = function(uri) {
+    var one = this.clone();
+    var two = new URI(uri);
+    var one_map = {};
+    var two_map = {};
+    var checked = {};
+    var one_query, two_query, key;
+
+    one.normalize();
+    two.normalize();
+
+    // exact match
+    if (one.toString() === two.toString()) {
+        return true;
+    }
+
+    // extract query string
+    one_query = one.query();
+    two_query = two.query();
+    one.query("");
+    two.query("");
+
+    // definitely not equal if not even non-query parts match
+    if (one.toString() !== two.toString()) {
+        return false;
+    }
+
+    // query parameters have the same length, even if they're permutated
+    if (one_query.length !== two_query.length) {
+        return false;
+    }
+
+    one_map = URI.parseQuery(one_query);
+    two_map = URI.parseQuery(two_query);
+
+    for (key in one_map) {
+        if (hasOwn.call(one_map, key)) {
+            if (!isArray(one_map[key])) {
+                if (one_map[key] !== two_map[key]) {
+                    return false;
+                }
+            } else {
+                if (!isArray(two_map[key])) {
+                    return false;
+                }
+
+                // arrays can't be equal if they have different amount of content
+                if (one_map[key].length !== two_map[key].length) {
+                    return false;
+                }
+
+                one_map[key].sort();
+                two_map[key].sort();
+
+                for (var i = 0, l = one_map[key].length; i < l; i++) {
+                    if (one_map[key][i] !== two_map[key][i]) {
+                        return false;
+                    }
+                }
+            }
+
+            checked[key] = true;
+        }
+    }
+
+    for (key in two_map) {
+        if (hasOwn.call(two_map, key)) {
+            if (!checked[key]) {
+                // two contains a parameter not present in one
+                return false;
+            }
+        }
+    }
+
+    return true;
+};
+
+// state
+p.duplicateQueryParameters = function(v) {
+    this._parts.duplicateQueryParameters = !!v;
+    return this;
+};
+
+return URI;
+}));
 /**
  * @license
  * Patterns @VERSION@ jquery-ext - various jQuery extensions
  *
  * Copyright 2011 Humberto Sermeño
  */
-(function( $ ){
+define('jquery_ext',["jquery"], function($) {
     var methods = {
         init: function( options ) {
             var settings = {
-                time: 3, /* time it will wait before moving to 'timeout' after a move event */
-                initialTime: 8, /* time it will wait before first adding the 'timeout' class */
+                time: 3, /* time it will wait before moving to "timeout" after a move event */
+                initialTime: 8, /* time it will wait before first adding the "timeout" class */
                 exceptionAreas: [] /* IDs of elements that, if the mouse is over them, will reset the timer */
             };
             return this.each(function() {
                 var $this = $(this),
-      data = $this.data('timeout');
+                    data = $this.data("timeout");
 
                 if (!data) {
                     if ( options ) {
                         $.extend( settings, options );
                     }
-                    $this.data('timeout', {
-                        'lastEvent': new Date(),
-                        'trueTime': settings.time,
-                        'time': settings.initialTime,
-                        'untouched': true,
-                        'inExceptionArea': false
+                    $this.data("timeout", {
+                        "lastEvent": new Date(),
+                        "trueTime": settings.time,
+                        "time": settings.initialTime,
+                        "untouched": true,
+                        "inExceptionArea": false
                     });
 
-                    $this.bind( 'mouseover.timeout', methods.mouseMoved );
-                    $this.bind( 'mouseenter.timeout', methods.mouseMoved );
+                    $this.bind( "mouseover.timeout", methods.mouseMoved );
+                    $this.bind( "mouseenter.timeout", methods.mouseMoved );
 
                     $(settings.exceptionAreas).each(function() {
                         $this.find(this)
-                            .live( 'mouseover.timeout', {'parent':$this}, methods.enteredException )
-                            .live( 'mouseleave.timeout', {'parent':$this}, methods.leftException );
+                            .live( "mouseover.timeout", {"parent":$this}, methods.enteredException )
+                            .live( "mouseleave.timeout", {"parent":$this}, methods.leftException );
                     });
 
                     if (settings.initialTime > 0)
-                        $this.timeout('startTimer');
+                        $this.timeout("startTimer");
                     else
-                        $this.addClass('timeout');
+                        $this.addClass("timeout");
                 }
             });
         },
 
         enteredException: function(event) {
-            var data = event.data.parent.data('timeout');
+            var data = event.data.parent.data("timeout");
             data.inExceptionArea = true;
-            event.data.parent.data('timeout', data);
-            event.data.parent.trigger('mouseover');
+            event.data.parent.data("timeout", data);
+            event.data.parent.trigger("mouseover");
         },
 
         leftException: function(event) {
-            var data = event.data.parent.data('timeout');
+            var data = event.data.parent.data("timeout");
             data.inExceptionArea = false;
-            event.data.parent.data('timeout', data);
+            event.data.parent.data("timeout", data);
         },
 
         destroy: function() {
             return this.each( function() {
                 var $this = $(this),
-      data = $this.data('timeout');
+                    data = $this.data("timeout");
 
-                $(window).unbind('.timeout');
+                $(window).unbind(".timeout");
                 data.timeout.remove();
-                $this.removeData('timeout');
+                $this.removeData("timeout");
             });
         },
 
-        mouseMoved: function(event) {
-            var $this = $(this), data = $this.data('timeout');
+        mouseMoved: function() {
+            var $this = $(this), data = $this.data("timeout");
 
-            if ($this.hasClass('timeout')) {
-                $this.removeClass('timeout');
-                $this.timeout('startTimer');
+            if ($this.hasClass("timeout")) {
+                $this.removeClass("timeout");
+                $this.timeout("startTimer");
             } else if ( data.untouched ) {
                 data.untouched = false;
                 data.time = data.trueTime;
             }
 
             data.lastEvent = new Date();
-            $this.data('timeout', data);
+            $this.data("timeout", data);
         },
 
-        startTimer: function( event ) {
-            var $this = $(this), data = $this.data('timeout');
+        startTimer: function() {
+            var $this = $(this), data = $this.data("timeout");
             var fn = function(){
-                var data = $this.data('timeout');
+                var data = $this.data("timeout");
                 if ( data && data.lastEvent ) {
                     if ( data.inExceptionArea ) {
                         setTimeout( fn, Math.floor( data.time*1000 ) );
@@ -22675,7 +23224,7 @@ define('lib/ajax',['require','../logging'],function(require) {
                             setTimeout( fn, diff+100 );
                         } else {
                             // timeout ocurred, so set the class
-                            $this.addClass('timeout');
+                            $this.addClass("timeout");
                         }
                     }
                 }
@@ -22688,39 +23237,38 @@ define('lib/ajax',['require','../logging'],function(require) {
     $.fn.timeout = function( method ) {
         if ( methods[method] ) {
             return methods[method].apply( this, Array.prototype.slice.call( arguments, 1 ));
-        } else if ( typeof method == 'object' || !method ) {
+        } else if ( typeof method === "object" || !method ) {
             return methods.init.apply( this, arguments );
         } else {
-            $.error( 'Method ' + method + ' does not exist on jQuery.timeout' );
+            $.error( "Method " + method + " does not exist on jQuery.timeout" );
         }
     };
 
-})( jQuery );
-
-// Custom jQuery selector to find elements with scrollbars
-(function($) {
+    // Custom jQuery selector to find elements with scrollbars
     $.extend($.expr[":"], {
         scrollable: function(element) {
             var vertically_scrollable, horizontally_scrollable;
-            if ($(element).css('overflow') == 'scroll' || $(element).css('overflowX') == 'scroll' || $(element).css('overflowY') == 'scroll') return true;
+            if ($(element).css("overflow") === "scroll" ||
+                $(element).css("overflowX") === "scroll" ||
+                $(element).css("overflowY") === "scroll")
+                return true;
 
             vertically_scrollable = (element.clientHeight < element.scrollHeight) && (
-                $.inArray($(element).css('overflowY'), ['scroll', 'auto']) != -1 || $.inArray($(element).css('overflow'), ['scroll', 'auto']) != -1);
+                $.inArray($(element).css("overflowY"), ["scroll", "auto"]) !== -1 || $.inArray($(element).css("overflow"), ["scroll", "auto"]) !== -1);
 
-            if (vertically_scrollable) return true;
+            if (vertically_scrollable)
+                return true;
 
             horizontally_scrollable = (element.clientWidth < element.scrollWidth) && (
-                $.inArray($(element).css('overflowX'), ['scroll', 'auto']) != -1 || $.inArray($(element).css('overflow'), ['scroll', 'auto']) != -1);
+                $.inArray($(element).css("overflowX"), ["scroll", "auto"]) !== -1 || $.inArray($(element).css("overflow"), ["scroll", "auto"]) !== -1);
             return horizontally_scrollable;
         }
     });
-})(jQuery);
 
-// Make Visible in scroll
-(function($) {
+    // Make Visible in scroll
     $.fn.makeVisibleInScroll = function( parent_id ) {
         var absoluteParent = null;
-        if ( typeof parent_id == 'string' ) {
+        if ( typeof parent_id === "string" ) {
             absoluteParent = $("#" + parent_id);
         } else if ( parent_id ) {
             absoluteParent = $(parent_id);
@@ -22752,10 +23300,8 @@ define('lib/ajax',['require','../logging'],function(require) {
             }
         });
     };
-})( jQuery );
 
-//Make absolute location
-(function($) {
+    //Make absolute location
     $.fn.setPositionAbsolute = function(element,offsettop,offsetleft) {
         return this.each(function() {
             // set absolute location for based on the element passed
@@ -22771,13 +23317,11 @@ define('lib/ajax',['require','../logging'],function(require) {
             $this.remove().appendTo("body").show();
         });
     };
-})( jQuery );
 
-(function($) {
     $.fn.positionAncestor = function(selector) {
         var left = 0;
         var top = 0;
-        this.each(function(index, element) {
+        this.each(function() {
             // check if current element has an ancestor matching a selector
             // and that ancestor is positioned
             var $ancestor = $(this).closest(selector);
@@ -22799,26 +23343,27 @@ define('lib/ajax',['require','../logging'],function(require) {
             top:    top
         };
     };
-})( jQuery );
-
-String.prototype.startsWith = function(str) { return (this.match("^"+str) !== null); };
-String.prototype.endsWith = function(str) { return (this.match(str+"$") !== null); };
 
 
-/******************************
+    // XXX: In compat.js we include things for browser compatibility,
+    // but these two seem to be only convenience. Do we really want to
+    // include these as part of patterns?
+    String.prototype.startsWith = function(str) { return (this.match("^"+str) !== null); };
+    String.prototype.endsWith = function(str) { return (this.match(str+"$") !== null); };
 
- Simple Placeholder
 
- ******************************/
+    /******************************
 
+     Simple Placeholder
 
-(function($) {
+     ******************************/
+
     $.simplePlaceholder = {
         placeholder_class: null,
 
         hide_placeholder: function(){
             var $this = $(this);
-            if($this.val() == $this.attr('placeholder')){
+            if($this.val() === $this.attr("placeholder")){
                 $this.val("").removeClass($.simplePlaceholder.placeholder_class);
             }
         },
@@ -22826,15 +23371,15 @@ String.prototype.endsWith = function(str) { return (this.match(str+"$") !== null
         show_placeholder: function(){
             var $this = $(this);
             if($this.val() === ""){
-                $this.val($this.attr('placeholder')).addClass($.simplePlaceholder.placeholder_class);
+                $this.val($this.attr("placeholder")).addClass($.simplePlaceholder.placeholder_class);
             }
         },
 
         prevent_placeholder_submit: function(){
-            $(this).find(".simple-placeholder").each(function(e){
+            $(this).find(".simple-placeholder").each(function() {
                 var $this = $(this);
-                if($this.val() == $this.attr('placeholder')){
-                    $this.val('');
+                if ($this.val() === $this.attr("placeholder")){
+                    $this.val("");
                 }
             });
             return true;
@@ -22842,9 +23387,9 @@ String.prototype.endsWith = function(str) { return (this.match(str+"$") !== null
     };
 
     $.fn.simplePlaceholder = function(options) {
-        if(document.createElement('input').placeholder === undefined){
+        if(document.createElement("input").placeholder === undefined){
             var config = {
-                placeholder_class : 'placeholding'
+                placeholder_class : "placeholding"
             };
 
             if(options) $.extend(config, options);
@@ -22854,7 +23399,7 @@ String.prototype.endsWith = function(str) { return (this.match(str+"$") !== null
                 var $this = $(this);
                 $this.focus($.simplePlaceholder.hide_placeholder);
                 $this.blur($.simplePlaceholder.show_placeholder);
-                if($this.val() === '') {
+                if($this.val() === "") {
                     $this.val($this.attr("placeholder"));
                     $this.addClass($.simplePlaceholder.placeholder_class);
                 }
@@ -22866,65 +23411,251 @@ String.prototype.endsWith = function(str) { return (this.match(str+"$") !== null
         return this;
     };
 
-})(jQuery);
-
-// case-insensitive :contains
-(function($) {
-    $.expr[':'].Contains = function(a, i, m) {
-        return jQuery(a).text().toUpperCase().indexOf(m[3].toUpperCase()) >= 0;
+    // case-insensitive :contains
+    $.expr[":"].Contains = function(a, i, m) {
+        return $(a).text().toUpperCase().indexOf(m[3].toUpperCase()) >= 0;
     };
-})( jQuery );
+});
 
-define("jquery_ext", ["jquery"], function(){});
+/*!
+ * URI.js - Mutating URLs
+ * jQuery Plugin
+ *
+ * Version: 1.8.0
+ *
+ * Author: Rodney Rehm
+ * Web: http://medialize.github.com/URI.js/jquery-uri-plugin.html
+ *
+ * Licensed under
+ *   MIT License http://www.opensource.org/licenses/mit-license
+ *   GPL v3 http://opensource.org/licenses/GPL-3.0
+ *
+ */
 
-/*! URI.js v1.7.2 http://medialize.github.com/URI.js/ */
-/* build contains: URI.js, jquery.URI.js */
-(function(g){function k(a){return a.replace(/([.*+?^=!:${}()|[\]\/\\])/g,"\\$1")}function l(a){return"[object Array]"===String(Object.prototype.toString.call(a))}function q(a){return encodeURIComponent(a).replace(/[!'()*]/g,escape)}var e="undefined"!==typeof module&&module.exports,p=e?require("./punycode"):window.punycode,r=e?require("./IPv6"):window.IPv6,m=e?require("./SecondLevelDomains"):window.SecondLevelDomains,c=function(a,b){if(!(this instanceof c))return new c(a,b);a===g&&(a="undefined"!==
-typeof location?location.href+"":"");this.href(a);return b!==g?this.absoluteTo(b):this},e=c.prototype;c.idn_expression=/[^a-z0-9\.-]/i;c.punycode_expression=/(xn--)/i;c.ip4_expression=/^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;c.ip6_expression=/^\s*((([0-9A-Fa-f]{1,4}:){7}([0-9A-Fa-f]{1,4}|:))|(([0-9A-Fa-f]{1,4}:){6}(:[0-9A-Fa-f]{1,4}|((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){5}(((:[0-9A-Fa-f]{1,4}){1,2})|:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3})|:))|(([0-9A-Fa-f]{1,4}:){4}(((:[0-9A-Fa-f]{1,4}){1,3})|((:[0-9A-Fa-f]{1,4})?:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){3}(((:[0-9A-Fa-f]{1,4}){1,4})|((:[0-9A-Fa-f]{1,4}){0,2}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){2}(((:[0-9A-Fa-f]{1,4}){1,5})|((:[0-9A-Fa-f]{1,4}){0,3}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(([0-9A-Fa-f]{1,4}:){1}(((:[0-9A-Fa-f]{1,4}){1,6})|((:[0-9A-Fa-f]{1,4}){0,4}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:))|(:(((:[0-9A-Fa-f]{1,4}){1,7})|((:[0-9A-Fa-f]{1,4}){0,5}:((25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)(\.(25[0-5]|2[0-4]\d|1\d\d|[1-9]?\d)){3}))|:)))(%.+)?\s*$/;
-c.find_uri_expression=/\b((?:[a-z][\w-]+:(?:\/{1,3}|[a-z0-9%])|www\d{0,3}[.]|[a-z0-9.\-]+[.][a-z]{2,4}\/)(?:[^\s()<>]+|\(([^\s()<>]+|(\([^\s()<>]+\)))*\))+(?:\(([^\s()<>]+|(\([^\s()<>]+\)))*\)|[^\s`!()\[\]{};:'".,<>?\u00ab\u00bb\u201c\u201d\u2018\u2019]))/ig;c.defaultPorts={http:"80",https:"443",ftp:"21"};c.invalid_hostname_characters=/[^a-zA-Z0-9\.-]/;c.encode=q;c.decode=decodeURIComponent;c.iso8859=function(){c.encode=escape;c.decode=unescape};c.unicode=function(){c.encode=q;c.decode=decodeURIComponent};
-c.characters={pathname:{encode:{expression:/%(24|26|2B|2C|3B|3D|3A|40)/ig,map:{"%24":"$","%26":"&","%2B":"+","%2C":",","%3B":";","%3D":"=","%3A":":","%40":"@"}},decode:{expression:/[\/\?#]/g,map:{"/":"%2F","?":"%3F","#":"%23"}}},reserved:{encode:{expression:/%(21|23|24|26|27|28|29|2A|2B|2C|2F|3A|3B|3D|3F|40|5B|5D)/ig,map:{"%3A":":","%2F":"/","%3F":"?","%23":"#","%5B":"[","%5D":"]","%40":"@","%21":"!","%24":"$","%26":"&","%27":"'","%28":"(","%29":")","%2A":"*","%2B":"+","%2C":",","%3B":";","%3D":"="}}}};
-c.encodeQuery=function(a){return c.encode(a+"").replace(/%20/g,"+")};c.decodeQuery=function(a){return c.decode((a+"").replace(/\+/g,"%20"))};c.recodePath=function(a){for(var a=(a+"").split("/"),b=0,d=a.length;b<d;b++)a[b]=c.encodePathSegment(c.decode(a[b]));return a.join("/")};c.decodePath=function(a){for(var a=(a+"").split("/"),b=0,d=a.length;b<d;b++)a[b]=c.decodePathSegment(a[b]);return a.join("/")};var h={encode:"encode",decode:"decode"},i,j=function(a,b){return function(d){return c[b](d+"").replace(c.characters[a][b].expression,
-function(d){return c.characters[a][b].map[d]})}};for(i in h)c[i+"PathSegment"]=j("pathname",h[i]);c.encodeReserved=j("reserved","encode");c.parse=function(a){var b,d={};b=a.indexOf("#");-1<b&&(d.fragment=a.substring(b+1)||null,a=a.substring(0,b));b=a.indexOf("?");-1<b&&(d.query=a.substring(b+1)||null,a=a.substring(0,b));"//"===a.substring(0,2)?(d.protocol="",a=a.substring(2),a=c.parseAuthority(a,d)):(b=a.indexOf(":"),-1<b&&(d.protocol=a.substring(0,b),"//"===a.substring(b+1,b+3)?(a=a.substring(b+
-3),a=c.parseAuthority(a,d)):(a=a.substring(b+1),d.urn=!0)));d.path=a;return d};c.parseHost=function(a,b){var d=a.indexOf("/"),f;-1===d&&(d=a.length);"["===a[0]?(f=a.indexOf("]"),b.hostname=a.substring(1,f)||null,b.port=a.substring(f+2,d)||null):a.indexOf(":")!==a.lastIndexOf(":")?(b.hostname=a.substring(0,d)||null,b.port=null):(f=a.substring(0,d).split(":"),b.hostname=f[0]||null,b.port=f[1]||null);b.hostname&&"/"!==a.substring(d)[0]&&(d++,a="/"+a);return a.substring(d)||"/"};c.parseAuthority=function(a,
-b){a=c.parseUserinfo(a,b);return c.parseHost(a,b)};c.parseUserinfo=function(a,b){var d=a.indexOf("@"),f=a.indexOf("/");-1<d&&(-1===f||d<f)?(f=a.substring(0,d).split(":"),b.username=f[0]?c.decode(f[0]):null,b.password=f[1]?c.decode(f[1]):null,a=a.substring(d+1)):(b.username=null,b.password=null);return a};c.parseQuery=function(a){if(!a)return{};a=a.replace(/&+/g,"&").replace(/^\?*&*|&+$/g,"");if(!a)return{};for(var b={},a=a.split("&"),d=a.length,f=0;f<d;f++){var n=a[f].split("="),e=c.decodeQuery(n.shift()),
-n=n.length?c.decodeQuery(n.join("=")):null;b[e]?("string"===typeof b[e]&&(b[e]=[b[e]]),b[e].push(n)):b[e]=n}return b};c.build=function(a){var b="";a.protocol&&(b+=a.protocol+":");if(!a.urn&&(b||a.hostname))b+="//";b+=c.buildAuthority(a)||"";"string"===typeof a.path&&("/"!==a.path[0]&&"string"===typeof a.hostname&&(b+="/"),b+=a.path);"string"===typeof a.query&&(b+="?"+a.query);"string"===typeof a.fragment&&(b+="#"+a.fragment);return b};c.buildHost=function(a){var b="";if(a.hostname)c.ip6_expression.test(a.hostname)?
-b=a.port?b+("["+a.hostname+"]:"+a.port):b+a.hostname:(b+=a.hostname,a.port&&(b+=":"+a.port));else return"";return b};c.buildAuthority=function(a){return c.buildUserinfo(a)+c.buildHost(a)};c.buildUserinfo=function(a){var b="";a.username&&(b+=c.encode(a.username),a.password&&(b+=":"+c.encode(a.password)),b+="@");return b};c.buildQuery=function(a,b){var d="",f;for(f in a)if(Object.hasOwnProperty.call(a,f)&&f)if(l(a[f]))for(var n={},e=0,h=a[f].length;e<h;e++)a[f][e]!==g&&n[a[f][e]+""]===g&&(d+="&"+c.buildQueryParameter(f,
-a[f][e]),!0!==b&&(n[a[f][e]+""]=!0));else a[f]!==g&&(d+="&"+c.buildQueryParameter(f,a[f]));return d.substring(1)};c.buildQueryParameter=function(a,b){return c.encodeQuery(a)+(null!==b?"="+c.encodeQuery(b):"")};c.addQuery=function(a,b,d){if("object"===typeof b)for(var f in b)Object.prototype.hasOwnProperty.call(b,f)&&c.addQuery(a,f,b[f]);else if("string"===typeof b)a[b]===g?a[b]=d:("string"===typeof a[b]&&(a[b]=[a[b]]),l(d)||(d=[d]),a[b]=a[b].concat(d));else throw new TypeError("URI.addQuery() accepts an object, string as the name parameter");
-};c.removeQuery=function(a,b,d){if(l(b))for(var d=0,f=b.length;d<f;d++)a[b[d]]=g;else if("object"===typeof b)for(f in b)Object.prototype.hasOwnProperty.call(b,f)&&c.removeQuery(a,f,b[f]);else if("string"===typeof b)if(d!==g)if(a[b]===d)a[b]=g;else{if(l(a[b])){var f=a[b],n={},e,h;if(l(d)){e=0;for(h=d.length;e<h;e++)n[d[e]]=!0}else n[d]=!0;e=0;for(h=f.length;e<h;e++)n[f[e]]!==g&&(f.splice(e,1),h--,e--);a[b]=f}}else a[b]=g;else throw new TypeError("URI.addQuery() accepts an object, string as the first parameter");
-};c.commonPath=function(a,b){var d=Math.min(a.length,b.length),f;for(f=0;f<d;f++)if(a[f]!==b[f]){f--;break}if(1>f)return a[0]===b[0]&&"/"===a[0]?"/":"";"/"!==a[f]&&(f=a.substring(0,f).lastIndexOf("/"));return a.substring(0,f+1)};c.withinString=function(a,b){return a.replace(c.find_uri_expression,b)};c.ensureValidHostname=function(a){if(a.match(c.invalid_hostname_characters)){if(!p)throw new TypeError("Hostname '"+a+"' contains characters other than [A-Z0-9.-] and Punycode.js is not available");if(p.toASCII(a).match(c.invalid_hostname_characters))throw new TypeError("Hostname '"+
-a+"' contains characters other than [A-Z0-9.-]");}};e.build=function(a){if(!0===a)this._deferred_build=!0;else if(a===g||this._deferred_build)this._string=c.build(this._parts),this._deferred_build=!1;return this};e.clone=function(){return new c(this)};e.toString=function(){return this.build(!1)._string};e.valueOf=function(){return this.toString()};h={protocol:"protocol",username:"username",password:"password",hostname:"hostname",port:"port"};j=function(a){return function(b,d){if(b===g)return this._parts[a]||
-"";this._parts[a]=b;this.build(!d);return this}};for(i in h)e[i]=j(h[i]);h={query:"?",fragment:"#"};j=function(a,b){return function(d,f){if(d===g)return this._parts[a]||"";null!==d&&(d+="",d[0]===b&&(d=d.substring(1)));this._parts[a]=d;this.build(!f);return this}};for(i in h)e[i]=j(i,h[i]);h={search:["?","query"],hash:["#","fragment"]};j=function(a,b){return function(d,f){var c=this[a](d,f);return"string"===typeof c&&c.length?b+c:c}};for(i in h)e[i]=j(h[i][1],h[i][0]);e.pathname=function(a,b){if(a===
-g||!0===a){var d=this._parts.path||(this._parts.urn?"":"/");return a?c.decodePath(d):d}this._parts.path=a?c.recodePath(a):"/";this.build(!b);return this};e.path=e.pathname;e.href=function(a,b){if(a===g)return this.toString();this._string="";this._parts={protocol:null,username:null,password:null,hostname:null,urn:null,port:null,path:null,query:null,fragment:null};var d=a instanceof c,f="object"===typeof a&&(a.hostname||a.path),e;if("string"===typeof a)this._parts=c.parse(a);else if(d||f)for(e in d=
-d?a._parts:a,d)Object.hasOwnProperty.call(this._parts,e)&&(this._parts[e]=d[e]);else throw new TypeError("invalid input");this.build(!b);return this};e.is=function(a){var b=!1,d=!1,f=!1,e=!1,h=!1,g=!1,i=!1,j=!this._parts.urn;this._parts.hostname&&(j=!1,d=c.ip4_expression.test(this._parts.hostname),f=c.ip6_expression.test(this._parts.hostname),b=d||f,h=(e=!b)&&m&&m.has(this._parts.hostname),g=e&&c.idn_expression.test(this._parts.hostname),i=e&&c.punycode_expression.test(this._parts.hostname));switch(a.toLowerCase()){case "relative":return j;
-case "absolute":return!j;case "domain":case "name":return e;case "sld":return h;case "ip":return b;case "ip4":case "ipv4":case "inet4":return d;case "ip6":case "ipv6":case "inet6":return f;case "idn":return g;case "url":return!this._parts.urn;case "urn":return!!this._parts.urn;case "punycode":return i}return null};var s=e.protocol,t=e.port,u=e.hostname;e.protocol=function(a,b){if(a!==g&&a&&(a=a.replace(/:(\/\/)?$/,""),a.match(/[^a-zA-z0-9\.+-]/)))throw new TypeError("Protocol '"+a+"' contains characters other than [A-Z0-9.+-]");
-return s.call(this,a,b)};e.scheme=e.protocol;e.port=function(a,b){if(this._parts.urn)return a===g?"":this;if(a!==g&&(0===a&&(a=null),a&&(a+="",":"===a[0]&&(a=a.substring(1)),a.match(/[^0-9]/))))throw new TypeError("Port '"+a+"' contains characters other than [0-9]");return t.call(this,a,b)};e.hostname=function(a,b){if(this._parts.urn)return a===g?"":this;if(a!==g){var d={};c.parseHost(a,d);a=d.hostname}return u.call(this,a,b)};e.host=function(a,b){if(this._parts.urn)return a===g?"":this;if(a===g)return this._parts.hostname?
-c.buildHost(this._parts):"";c.parseHost(a,this._parts);this.build(!b);return this};e.authority=function(a,b){if(this._parts.urn)return a===g?"":this;if(a===g)return this._parts.hostname?c.buildAuthority(this._parts):"";c.parseAuthority(a,this._parts);this.build(!b);return this};e.userinfo=function(a,b){if(this._parts.urn)return a===g?"":this;if(a===g){if(!this._parts.username)return"";var d=c.buildUserinfo(this._parts);return d.substring(0,d.length-1)}"@"!==a[a.length-1]&&(a+="@");c.parseUserinfo(a,
-this._parts);this.build(!b);return this};e.subdomain=function(a,b){if(this._parts.urn)return a===g?"":this;if(a===g){if(!this._parts.hostname||this.is("IP"))return"";var d=this._parts.hostname.length-this.domain().length-1;return this._parts.hostname.substring(0,d)||""}d=this._parts.hostname.length-this.domain().length;d=this._parts.hostname.substring(0,d);d=RegExp("^"+k(d));a&&"."!==a[a.length-1]&&(a+=".");a&&c.ensureValidHostname(a);this._parts.hostname=this._parts.hostname.replace(d,a);this.build(!b);
-return this};e.domain=function(a,b){if(this._parts.urn)return a===g?"":this;"boolean"===typeof a&&(b=a,a=g);if(a===g){if(!this._parts.hostname||this.is("IP"))return"";var d=this._parts.hostname.match(/\./g);if(d&&2>d.length)return this._parts.hostname;d=this._parts.hostname.length-this.tld(b).length-1;d=this._parts.hostname.lastIndexOf(".",d-1)+1;return this._parts.hostname.substring(d)||""}if(!a)throw new TypeError("cannot set domain empty");c.ensureValidHostname(a);!this._parts.hostname||this.is("IP")?
-this._parts.hostname=a:(d=RegExp(k(this.domain())+"$"),this._parts.hostname=this._parts.hostname.replace(d,a));this.build(!b);return this};e.tld=function(a,b){if(this._parts.urn)return a===g?"":this;"boolean"===typeof a&&(b=a,a=g);if(a===g){if(!this._parts.hostname||this.is("IP"))return"";var d=this._parts.hostname.lastIndexOf("."),d=this._parts.hostname.substring(d+1);return!0!==b&&m&&m.list[d.toLowerCase()]?m.get(this._parts.hostname)||d:d}if(a)if(a.match(/[^a-zA-Z0-9-]/))if(m&&m.is(a))d=RegExp(k(this.tld())+
-"$"),this._parts.hostname=this._parts.hostname.replace(d,a);else throw new TypeError("TLD '"+a+"' contains characters other than [A-Z0-9]");else{if(!this._parts.hostname||this.is("IP"))throw new ReferenceError("cannot set TLD on non-domain host");d=RegExp(k(this.tld())+"$");this._parts.hostname=this._parts.hostname.replace(d,a)}else throw new TypeError("cannot set TLD empty");this.build(!b);return this};e.directory=function(a,b){if(this._parts.urn)return a===g?"":this;if(a===g||!0===a){if(!this._parts.path&&
-!this._parts.hostname)return"";if("/"===this._parts.path)return"/";var d=this._parts.path.length-this.filename().length-1,d=this._parts.path.substring(0,d)||(this._parts.hostname?"/":"");return a?c.decodePath(d):d}d=this._parts.path.length-this.filename().length;d=this._parts.path.substring(0,d);d=RegExp("^"+k(d));this.is("relative")||(a||(a="/"),"/"!==a[0]&&(a="/"+a));a&&"/"!==a[a.length-1]&&(a+="/");a=c.recodePath(a);this._parts.path=this._parts.path.replace(d,a);this.build(!b);return this};e.filename=
-function(a,b){if(this._parts.urn)return a===g?"":this;if(a===g||!0===a){if(!this._parts.path||"/"===this._parts.path)return"";var d=this._parts.path.lastIndexOf("/"),d=this._parts.path.substring(d+1);return a?c.decodePathSegment(d):d}d=!1;"/"===a[0]&&(a=a.substring(1));a.match(/\.?\//)&&(d=!0);var f=RegExp(k(this.filename())+"$"),a=c.recodePath(a);this._parts.path=this._parts.path.replace(f,a);d?this.normalizePath(b):this.build(!b);return this};e.suffix=function(a,b){if(this._parts.urn)return a===
-g?"":this;if(a===g||!0===a){if(!this._parts.path||"/"===this._parts.path)return"";var d=this.filename(),f=d.lastIndexOf(".");if(-1===f)return"";d=d.substring(f+1);d=/^[a-z0-9%]+$/i.test(d)?d:"";return a?c.decodePathSegment(d):d}"."===a[0]&&(a=a.substring(1));if(d=this.suffix())f=a?RegExp(k(d)+"$"):RegExp(k("."+d)+"$");else{if(!a)return this;this._parts.path+="."+c.recodePath(a)}f&&(a=c.recodePath(a),this._parts.path=this._parts.path.replace(f,a));this.build(!b);return this};e.segment=function(a,b,
-d){var f=this._parts.urn?":":"/",c=this.path(),e="/"===c.substring(0,1),c=c.split(f);"number"!==typeof a&&(d=b,b=a,a=g);if(a!==g&&"number"!==typeof a)throw Error("Bad segment '"+a+"', must be 0-based integer");e&&c.shift();0>a&&(a=Math.max(c.length+a,0));if(b===g)return a===g?c:c[a];if(null===a||c[a]===g)if(l(b))c=b;else{if(b||"string"===typeof b&&b.length)""===c[c.length-1]?c[c.length-1]=b:c.push(b)}else b||"string"===typeof b&&b.length?c[a]=b:c.splice(a,1);e&&c.unshift("");return this.path(c.join(f),
-d)};var v=e.query;e.query=function(a,b){return!0===a?c.parseQuery(this._parts.query):a!==g&&"string"!==typeof a?(this._parts.query=c.buildQuery(a),this.build(!b),this):v.call(this,a,b)};e.addQuery=function(a,b,d){var f=c.parseQuery(this._parts.query);c.addQuery(f,a,b);this._parts.query=c.buildQuery(f);"string"!==typeof a&&(d=b);this.build(!d);return this};e.removeQuery=function(a,b,d){var f=c.parseQuery(this._parts.query);c.removeQuery(f,a,b);this._parts.query=c.buildQuery(f);"string"!==typeof a&&
-(d=b);this.build(!d);return this};e.addSearch=e.addQuery;e.removeSearch=e.removeQuery;e.normalize=function(){return this._parts.urn?this.normalizeProtocol(!1).normalizeQuery(!1).normalizeFragment(!1).build():this.normalizeProtocol(!1).normalizeHostname(!1).normalizePort(!1).normalizePath(!1).normalizeQuery(!1).normalizeFragment(!1).build()};e.normalizeProtocol=function(a){"string"===typeof this._parts.protocol&&(this._parts.protocol=this._parts.protocol.toLowerCase(),this.build(!a));return this};
-e.normalizeHostname=function(a){this._parts.hostname&&(this.is("IDN")&&p?this._parts.hostname=p.toASCII(this._parts.hostname):this.is("IPv6")&&r&&(this._parts.hostname=r.best(this._parts.hostname)),this._parts.hostname=this._parts.hostname.toLowerCase(),this.build(!a));return this};e.normalizePort=function(a){"string"===typeof this._parts.protocol&&this._parts.port===c.defaultPorts[this._parts.protocol]&&(this._parts.port=null,this.build(!a));return this};e.normalizePath=function(a){if(this._parts.urn||
-!this._parts.path||"/"===this._parts.path)return this;var b,d,f=this._parts.path,e,h;"/"!==f[0]&&("."===f[0]&&(d=f.substring(0,f.indexOf("/"))),b=!0,f="/"+f);for(f=f.replace(/(\/(\.\/)+)|\/{2,}/g,"/");;){e=f.indexOf("/../");if(-1===e)break;else if(0===e){f=f.substring(3);break}h=f.substring(0,e).lastIndexOf("/");-1===h&&(h=e);f=f.substring(0,h)+f.substring(e+3)}b&&this.is("relative")&&(f=d?d+f:f.substring(1));f=c.recodePath(f);this._parts.path=f;this.build(!a);return this};e.normalizePathname=e.normalizePath;
-e.normalizeQuery=function(a){"string"===typeof this._parts.query&&(this._parts.query.length?this.query(c.parseQuery(this._parts.query)):this._parts.query=null,this.build(!a));return this};e.normalizeFragment=function(a){this._parts.fragment||(this._parts.fragment=null,this.build(!a));return this};e.normalizeSearch=e.normalizeQuery;e.normalizeHash=e.normalizeFragment;e.iso8859=function(){var a=c.encode,b=c.decode;c.encode=escape;c.decode=decodeURIComponent;this.normalize();c.encode=a;c.decode=b;return this};
-e.unicode=function(){var a=c.encode,b=c.decode;c.encode=q;c.decode=unescape;this.normalize();c.encode=a;c.decode=b;return this};e.readable=function(){var a=this.clone();a.username("").password("").normalize();var b="";a._parts.protocol&&(b+=a._parts.protocol+"://");a._parts.hostname&&(a.is("punycode")&&p?(b+=p.toUnicode(a._parts.hostname),a._parts.port&&(b+=":"+a._parts.port)):b+=a.host());a._parts.hostname&&(a._parts.path&&"/"!==a._parts.path[0])&&(b+="/");b+=a.path(!0);if(a._parts.query){for(var d=
-"",f=0,e=a._parts.query.split("&"),h=e.length;f<h;f++){var i=(e[f]||"").split("="),d=d+("&"+c.decodeQuery(i[0]).replace(/&/g,"%26"));i[1]!==g&&(d+="="+c.decodeQuery(i[1]).replace(/&/g,"%26"))}b+="?"+d.substring(1)}return b+=a.hash()};e.absoluteTo=function(a){var b=this.clone(),d=["protocol","username","password","hostname","port"],f,e;if(this._parts.urn)throw Error("URNs do not have any generally defined hierachical components");if(this._parts.hostname)return b;a instanceof c||(a=new c(a));f=0;for(e;e=
-d[f];f++)b._parts[e]=a._parts[e];d=["query","path"];f=0;for(e;e=d[f];f++)!b._parts[e]&&a._parts[e]&&(b._parts[e]=a._parts[e]);"/"!==b.path()[0]&&(a=a.directory(),b._parts.path=(a?a+"/":"")+b._parts.path,b.normalizePath());b.build();return b};e.relativeTo=function(a){var b=this.clone(),d=["protocol","username","password","hostname","port"],f;if(this._parts.urn)throw Error("URNs do not have any generally defined hierachical components");a instanceof c||(a=new c(a));if("/"!==this.path()[0]||"/"!==a.path()[0])throw Error("Cannot calculate common path from non-relative URLs");
-f=c.commonPath(b.path(),a.path());for(var a=a.directory(),e=0,h;h=d[e];e++)b._parts[h]=null;if(!f||"/"===f)return b;if(a+"/"===f)b._parts.path="./"+b.filename();else{d="../";f=RegExp("^"+k(f));for(a=a.replace(f,"/").match(/\//g).length-1;a--;)d+="../";b._parts.path=b._parts.path.replace(f,d)}b.build();return b};e.equals=function(a){var b=this.clone(),d=new c(a),f={},e={},a={},h;b.normalize();d.normalize();if(b.toString()===d.toString())return!0;f=b.query();e=d.query();b.query("");d.query("");if(b.toString()!==
-d.toString()||f.length!==e.length)return!1;f=c.parseQuery(f);e=c.parseQuery(e);for(h in f)if(Object.prototype.hasOwnProperty.call(f,h)){if(l(f[h])){if(!l(e[h])||f[h].length!==e[h].length)return!1;f[h].sort();e[h].sort();b=0;for(d=f[h].length;b<d;b++)if(f[h][b]!==e[h][b])return!1}else if(f[h]!==e[h])return!1;a[h]=!0}for(h in e)if(Object.prototype.hasOwnProperty.call(e,h)&&!a[h])return!1;return!0};"undefined"!==typeof module&&module.exports?module.exports=c:window.URI=c})();
-(function(g,k){function l(c){return c.replace(/([.*+?^=!:${}()|[\]\/\\])/g,"\\$1")}function q(c){var e;g.each(["href","src","action"],function(g,k){return k in c?(e=k,!1):!0});return"input"===c.nodeName.toLowerCase()&&"image"!==c.type?k:e}var e="undefined"!==typeof module&&module.exports?require("./URIjs"):window.URI,p=/^([a-zA-Z]+)\s*([\^\$*]?=|:)\s*(['"]?)(.+)\3|^\s*([a-zA-Z0-9]+)\s*$/,r={},m={"=":function(c,e){return c===e},"^=":function(c,e){return!!(c+"").match(RegExp("^"+l(e),"i"))},"$=":function(c,
-e){return!!(c+"").match(RegExp(l(e)+"$","i"))},"*=":function(c,e,g){"directory"==g&&(c+="/");return!!(c+"").match(RegExp(l(e),"i"))},"equals:":function(c,e){return c.equals(e)},"is:":function(c,e){return c.is(e)}};g.each("authority directory domain filename fragment hash host hostname href password path pathname port protocol query scheme search subdomain suffix tld username".split(" "),function(c,e){r[e]=!0;g.attrHooks["uri:"+e]={get:function(c){return g(c).uri()[e]()},set:function(c,h){g(c).uri()[e](h);
-return h}}});g.fn.uri=function(c){var g=this.first(),j=g.get(0),l=q(j);if(!l)throw Error('Element "'+j.nodeName+'" does not have either property: href, src, action');if(c!==k){var m=g.data("uri");if(m)return m.href(c);c instanceof e||(c=e(c))}else{if(c=g.data("uri"))return c;c=e(g.attr(l))}c._dom_element=j;c._dom_attribute=l;c.normalize();g.data("uri",c);return c};e.prototype.build=function(c){if(this._dom_element)this._string=e.build(this._parts),this._deferred_build=!1,this._dom_element.setAttribute(this._dom_attribute,
-this._string),this._dom_element[this._dom_attribute]=this._string;else if(!0===c)this._deferred_build=!0;else if(c===k||this._deferred_build)this._string=e.build(this._parts),this._deferred_build=!1;return this};g.expr.filters.uri=function(c,e,j){if(!q(c)||!j[3])return!1;e=j[3].match(p);if(!e||!e[5]&&":"!==e[2]&&!m[e[2]])return!1;j=g(c).uri();if(e[5])return j.is(e[5]);if(":"===e[2])return c=e[1].toLowerCase()+":",!m[c]?!1:m[c](j,e[4]);c=e[1].toLowerCase();return!r[c]?!1:m[e[2]](j[c](),e[4],c)};var c=
-function(c,e){return g(c).uri().href(e).toString()};g.each(["src","href","action","uri"],function(e,i){g.attrHooks[i]={set:c}});g.attrHooks.uri.get=function(c){return g(c).uri()}})(jQuery);
+(function (root, factory) {
+    // https://github.com/umdjs/umd/blob/master/returnExports.js
+    if (typeof exports === 'object') {
+        // Node
+        module.exports = factory(require('jquery', './URI'));
+    } else if (typeof define === 'function' && define.amd) {
+        // AMD. Register as an anonymous module.
+        define('URIjs/jquery.URI',['jquery', './URI'], factory);
+    } else {
+        // Browser globals (root is window)
+        factory(root.jQuery, root.URI);
+    }
+}(this, function ($, URI) {
 
-define("URI", function(){});
 
+var comparable = {};
+var compare = {
+    // equals 
+    '=': function(value, target) {
+        return value === target;
+    },
+    // ~= translates to value.match((?:^|\s)target(?:\s|$)) which is useless for URIs
+    // |= translates to value.match((?:\b)target(?:-|\s|$)) which is useless for URIs
+    // begins with
+    '^=': function(value, target, property) {
+        return !!(value + "").match(new RegExp('^' + escapeRegEx(target), 'i'));
+    },
+    // ends with
+    '$=': function(value, target, property) {
+        return !!(value + "").match(new RegExp(escapeRegEx(target) + '$', 'i'));
+    },
+    // contains
+    '*=': function(value, target, property) {
+        if (property == 'directory') {
+            // add trailing slash so /dir/ will match the deep-end as well
+            value += '/';
+        }
+        
+        return !!(value + "").match(new RegExp(escapeRegEx(target), 'i'));
+    },
+    'equals:': function(uri, target) {
+        return uri.equals(target);
+    },
+    'is:': function(uri, target) {
+        return uri.is(target);
+    }
+};
+
+function escapeRegEx(string) {
+    // https://github.com/medialize/URI.js/commit/85ac21783c11f8ccab06106dba9735a31a86924d#commitcomment-821963
+    return string.replace(/([.*+?^=!:${}()|[\]\/\\])/g, '\\$1');
+}
+
+function getUriProperty(elem) {
+    var property;
+    
+    // Note: IE9 will report img.href, so check img.src first (Issue #48)
+    $.each(['src', 'href', 'action'], function(k, v) {
+        if (v in elem ) {
+            property = v;
+            return false;
+        }
+    
+        return true;
+    });
+    
+    // compensate ambiguous <input>
+    if (elem.nodeName.toLowerCase() === 'input' && elem.type !== 'image') {
+        return undefined;
+    }
+    
+    return property;
+}
+
+function generateAccessor(property) {
+    return {
+        get: function(elem) {
+            return $(elem).uri()[property]();
+        },
+        set: function(elem, value) {
+            $(elem).uri()[property](value);
+            return value;
+        }
+    };
+};
+
+// populate lookup table and register $.attr('uri:accessor') handlers
+$.each('authority directory domain filename fragment hash host hostname href password path pathname port protocol query resource scheme search subdomain suffix tld username'.split(" "), function(k, v) {
+    comparable[v] = true;
+    $.attrHooks['uri:' + v] = generateAccessor(v);
+});
+
+// pipe $.attr('src') and $.attr('href') through URI.js
+var _attrHooks = {
+    get: function(elem) {
+        return $(elem).uri();
+    },
+    set: function(elem, value) {
+        return $(elem).uri().href(value).toString();
+    }
+};
+$.each(['src', 'href', 'action', 'uri'], function(k, v) {
+    $.attrHooks[v] = {
+        set: _attrHooks.set
+    };
+});
+$.attrHooks.uri.get = _attrHooks.get;
+
+// general URI accessor
+$.fn.uri = function(uri) {
+    var $this = this.first();
+    var elem = $this.get(0);
+    var property = getUriProperty(elem);
+    
+    if (!property) {
+        throw new Error('Element "' + elem.nodeName + '" does not have either property: href, src, action');
+    }
+    
+    if (uri !== undefined) {
+        var old = $this.data('uri');
+        if (old) {
+            return old.href(uri);
+        }
+        
+        if (!(uri instanceof URI)) {
+            uri = URI(uri);
+        }
+    } else {
+        uri = $this.data('uri');
+        if (uri) {
+            return uri;
+        } else {
+    		uri = URI($this.attr(property));
+        }
+    }
+    
+    uri._dom_element = elem;
+    uri._dom_attribute = property;
+    uri.normalize();
+    $this.data('uri', uri);
+    return uri;
+};
+
+// overwrite URI.build() to update associated DOM element if necessary
+URI.prototype.build = function(deferBuild) {
+    if (this._dom_element) {
+        // cannot defer building when hooked into a DOM element
+        this._string = URI.build(this._parts);
+        this._deferred_build = false;
+        this._dom_element.setAttribute(this._dom_attribute, this._string);
+        this._dom_element[this._dom_attribute] = this._string;
+    } else if (deferBuild === true) {
+        this._deferred_build = true;
+    } else if (deferBuild === undefined || this._deferred_build) {
+        this._string = URI.build(this._parts);
+        this._deferred_build = false;
+    }
+    
+    return this;
+};
+
+// add :uri() pseudo class selector to sizzle
+var uriSizzle;
+var pseudoArgs = /^([a-zA-Z]+)\s*([\^\$*]?=|:)\s*(['"]?)(.+)\3|^\s*([a-zA-Z0-9]+)\s*$/;
+function uriPseudo (elem, text) {
+    var match, property, uri;
+    
+    // skip anything without src|href|action and bad :uri() syntax
+    if (!getUriProperty(elem) || !text) {
+        return false;
+    }
+    
+    match = text.match(pseudoArgs);
+
+    if (!match || (!match[5] && match[2] !== ':' && !compare[match[2]])) {
+        // abort because the given selector cannot be executed
+        // filers seem to fail silently
+        return false;
+    }
+
+    uri = $(elem).uri();
+    
+    if (match[5]) {
+        return uri.is(match[5]);
+    } else if (match[2] === ':') {
+        property = match[1].toLowerCase() + ':';
+        if (!compare[property]) {
+            // filers seem to fail silently
+            return false;
+        }
+        
+        return compare[property](uri, match[4]);
+    } else {
+        property = match[1].toLowerCase();
+        if (!comparable[property]) {
+            // filers seem to fail silently
+            return false;
+        }
+        
+        return compare[match[2]](uri[property](), match[4], property);
+    }
+
+    return false;
+}
+
+if ($.expr.createPseudo) {
+    // jQuery >= 1.8
+    uriSizzle = $.expr.createPseudo(function (text) {
+        return function (elem) {
+            return uriPseudo(elem, text);
+        };
+    });
+} else {
+    // jQuery < 1.8
+    uriSizzle = function (elem, i, match) {
+        return uriPseudo(elem, match[3]);
+    };
+}
+
+$.expr[":"].uri = uriSizzle;
+
+// extending existing object rather than defining something new
+return {};
+}));
 /*
  * changes to previous injection implementations
  * - no support for data-injection anymore, switch to new data-inject
@@ -22934,104 +23665,119 @@ define("URI", function(){});
 define('patterns/inject',[
     "jquery",
     "../core/parser",
+    "../core/logger",
     "../lib/ajax",
-    "../logging",
     "../registry",
+    "URIjs/URI",
     "jquery_ext", // for :scrollable for autoLoading-visible
-    "URI"
-], function($, Parser, ajax, logging, registry) {
-    var log = logging.getLogger('inject'),
+    "URIjs/jquery.URI"
+], function($, Parser, logger, ajax, registry, URI) {
+    var log = logger.getLogger("pat.inject"),
         parser = new Parser("inject");
 
-    //parser.add_argument('selector', 'body');
-    parser.add_argument('selector');
-    //XXX: (yet) unsupported: parser.add_argument('target', '$selector');
-    parser.add_argument('target');
-    parser.add_argument('type');
-    parser.add_argument('next-href');
-    //XXX: (yet) unsupported: parser.add_argument('source', '$selector');
-    parser.add_argument('source');
+    //parser.add_argument("selector", "body");
+    parser.add_argument("selector");
+    //XXX: (yet) unsupported: parser.add_argument("target", "$selector");
+    parser.add_argument("target");
+    parser.add_argument("data-type", "html");
+    parser.add_argument("next-href");
+    //XXX: (yet) unsupported: parser.add_argument("source", "$selector");
+    parser.add_argument("source");
+    parser.add_argument("trigger", "default", ["default", "autoload", "autoload-visible"]);
     // XXX: this should not be here but the parser would bail on
     // unknown parameters and expand/collapsible need to pass the url
     // to us
-    parser.add_argument('url');
-    parser.add_argument('class');
+    parser.add_argument("url");
+    parser.add_argument("class");
 
     var _ = {
         name: "inject",
         trigger: "a.pat-inject, form.pat-inject",
         init: function($el, opts) {
-            return $el.each(function() {
-                var $el = $(this),
-                    cfgs = _.extractConfig($el, opts);
-                $el.data('patterns.inject', cfgs);
+            if ($el.length > 1)
+                return $el.each(function() { _.init($(this), opts); });
 
-                // In case next-href is specified the anchor's href will
-                // be set to it after the injection is triggered. In case
-                // the next href already exists, we do not activate the
-                // injection but instead just change the anchors href.
-                //
-                // XXX: This is used in only one project for linked
-                // fullcalendars, it's sanity is wonky and we should
-                // probably solve it differently. -- Maybe it's cool
-                // after all.
-                var $nexthref = $(cfgs[0].nextHref);
-                if ($el.is('a') && $nexthref.length > 0) {
-                    log.debug('Skipping as next href already exists', $nexthref);
-                    // XXX: reconsider how the injection enters exhausted state
-                    return $el.attr({href: cfgs[0].nextHref});
-                }
+            var cfgs = _.extractConfig($el, opts);
+            $el.data("patterns.inject", cfgs);
 
+            // In case next-href is specified the anchor's href will
+            // be set to it after the injection is triggered. In case
+            // the next href already exists, we do not activate the
+            // injection but instead just change the anchors href.
+            //
+            // XXX: This is used in only one project for linked
+            // fullcalendars, it's sanity is wonky and we should
+            // probably solve it differently. -- Maybe it's cool
+            // after all.
+            var $nexthref = $(cfgs[0].nextHref);
+            if ($el.is("a") && $nexthref.length > 0) {
+                log.debug("Skipping as next href already exists", $nexthref);
+                // XXX: reconsider how the injection enters exhausted state
+                return $el.attr({href: (window.location.href.split("#")[0] || "") +
+                                 cfgs[0].nextHref});
+            }
+
+            switch (cfgs[0].trigger) {
+            case "default":
                 // setup event handlers
-                if ($el.is('a'))
+                if ($el.is("a"))
                     $el.on("click.pat-inject", _.onClick);
-                else if ($el.is('form'))
+                else if ($el.is("form"))
                     $el.on("submit.pat-inject", _.onSubmit);
+                break;
+            case "autoload":
+                _.onClick.apply($el[0], []);
+                break;
+            case "autoload-visible":
+                _._initAutoloadVisible($el);
+                break;
+            }
 
-                // XXX: hack to support the old autoLoading-visible class
-                if ($el.hasClass("autoLoading-visible"))
-                    _._initAutoloadVisible($el);
+            log.debug("initialised:", $el);
 
-                return $el;
-            });
-        },
-        destroy: function($el) {
-            $el.off('.pat-inject');
-            $el.data('patterns.inject', null);
             return $el;
         },
+
+        destroy: function($el) {
+            $el.off(".pat-inject");
+            $el.data("patterns.inject", null);
+            return $el;
+        },
+
         onClick: function(ev) {
-            var cfgs = $(this).data('patterns.inject'),
+            var cfgs = $(this).data("patterns.inject"),
                 $el = $(this);
             if (ev)
                 ev.preventDefault();
-            $el.trigger('patterns-inject-triggered');
+            $el.trigger("patterns-inject-triggered");
             _.execute(cfgs, $el);
         },
+
         onSubmit: function(ev) {
-            var cfgs = $(this).data('patterns.inject'),
+            var cfgs = $(this).data("patterns.inject"),
                 $el = $(this);
             if (ev)
                 ev.preventDefault();
-            $el.trigger('patterns-inject-triggered');
+            $el.trigger("patterns-inject-triggered");
             _.execute(cfgs, $el);
         },
+
         extractConfig: function($el, opts) {
             opts = $.extend({}, opts);
 
             var urlparts, cfgs, defaultSelector;
             // opts has priority, fallback to href/action
-            opts.url = opts.url || $el.attr('href') || $el.attr('action') || "";
+            opts.url = opts.url || $el.attr("href") || $el.attr("action") || "";
 
             // separate selector from url
-            urlparts = opts.url.split('#');
+            urlparts = opts.url.split("#");
             opts.url = urlparts[0];
 
             // if no selector, check for selector as part of original url
-            defaultSelector = urlparts[1] && '#' + urlparts[1] || 'body';
+            defaultSelector = urlparts[1] && "#" + urlparts[1] || "body";
 
             if (urlparts.length > 2) {
-                log.warn('Ignoring additional source ids:', urlparts.slice(2));
+                log.warn("Ignoring additional source ids:", urlparts.slice(2));
             }
 
             cfgs = parser.parse($el, opts, true);
@@ -23042,7 +23788,7 @@ define('patterns/inject',[
         },
         // verify and post-process config
         // XXX: this should return a command instead of messing around on the config
-        verifyConfig: function(cfgs) {
+        verifyConfig: function(cfgs, $el) {
             var url = cfgs[0].url;
 
             // verification for each cfg in the array needs to succeed
@@ -23050,7 +23796,7 @@ define('patterns/inject',[
                 // in case of multi-injection, all injections need to use
                 // the same url
                 if (cfg.url !== url) {
-                    log.error('Unsupported different urls for multi-inject');
+                    log.error("Unsupported different urls for multi-inject");
                     return false;
                 }
 
@@ -23062,10 +23808,10 @@ define('patterns/inject',[
                     return false;
 
                 // make sure target exist
-                cfg.$target = cfg.$target || $(cfg.target);
+                cfg.$target = cfg.$target || (cfg.target==="self" ? $el : $(cfg.target));
                 if (cfg.$target.length === 0) {
                     if (!cfg.target) {
-                        log.error('Need target selector', cfg);
+                        log.error("Need target selector", cfg);
                         return false;
                     }
                     cfg.$target = _._createTarget(cfg.target);
@@ -23074,6 +23820,7 @@ define('patterns/inject',[
                 return true;
             });
         },
+
         _extractModifiers: function(cfg) {
             var source_re = /^(.+?)(::element)?$/,
                 target_re = /^(.+?)(::element)?(::after|::before)?$/,
@@ -23101,7 +23848,7 @@ define('patterns/inject',[
 
             cfg.action = targetMod + targetPosition;
 
-            // Once we start detacting illegal combinations, we'll
+            // Once we start detecting illegal combinations, we'll
             // return false in case of error
             return true;
         },
@@ -23112,14 +23859,15 @@ define('patterns/inject',[
         // that id appended to the body.
         _createTarget: function(selector) {
             var $target;
-            if (selector.slice(0,1) !== '#') {
-                log.error('only id supported for non-existing target');
+            if (selector.slice(0,1) !== "#") {
+                log.error("only id supported for non-existing target");
                 return null;
             }
-            $target = $('<div />').attr({id: selector.slice(1)});
-            $('body').append($target);
+            $target = $("<div />").attr({id: selector.slice(1)});
+            $("body").append($target);
             return $target;
         },
+
         execute: function(cfgs, $el) {
             // get a kinda deep copy, we scribble on it
             cfgs = cfgs.map(function(cfg) {
@@ -23128,7 +23876,7 @@ define('patterns/inject',[
 
             // XXX: this need to get functional, returning a command
             // for internal use, instead of passing on cfgs
-            if (!_.verifyConfig(cfgs))
+            if (!_.verifyConfig(cfgs, $el))
                 return;
 
             // possibility for spinners on targets
@@ -23136,14 +23884,14 @@ define('patterns/inject',[
                 cfg.$target.addClass(cfg.targetLoadClasses);
             });
 
-            var onSuccess = function(data, status, jqxhr) {
+            var onSuccess = function(ev) {
+                var data = ev && ev.jqxhr && ev.jqxhr.responseText;
                 if (!data) {
-                    log.warn('No response content, aborting', status, jqxhr);
+                    log.warn("No response content, aborting", ev);
                     return;
                 }
-                // list of $source objects, one for each cfg
-                var sources = cfgs.map(function(cfg) { return cfg.source; }),
-                    sources$ = _._sourcesFromHtml(data, cfgs[0].url, sources);
+
+                var sources$ = _.callTypeHandler(cfgs[0].dataType, "sources", $el, [cfgs, data, ev]);
 
                 cfgs.forEach(function(cfg, idx) {
                     var $source = sources$[idx];
@@ -23157,28 +23905,39 @@ define('patterns/inject',[
                             $src = $source.clone(),
                             $injected = cfg.$injected || $src;
                         if (_._inject($src, $target, cfg.action, cfg["class"])) {
+                            $injected.filter(function() {
+                                // setting data on textnode fails in IE8
+                                return this.nodeType !== 3; //Node.TEXT_NODE
+                            }).data("pat-injected", {origin: cfg.url});
                             $injected.addClass(cfg["class"])
-                                .trigger('patterns-injected', cfg);
+                                .trigger("patterns-injected", cfg);
                         }
                     });
                 });
 
                 if (cfgs[0].nextHref) {
-                    $el.attr({href: cfgs[0].nextHref});
+                    $el.attr({href: (window.location.href.split("#")[0] || "") +
+                              cfgs[0].nextHref});
                     _.destroy($el);
 
-                   // jump to new href target
-                   if (!$el.hasClass("autoLoading-visible"))
-                       window.location.href = $el.attr('href');
+                    // XXX: this used to be the case, but I don't see
+                    // why that would be a good idea.
+                    //
+                    // jump to new href target
+                    //if (!$el.hasClass("autoLoading-visible"))
+                    //    window.location.href = $el.attr('href');
                 }
+                $el.off("pat-ajax-success.pat-inject");
             };
 
+            $el.on("pat-ajax-success.pat-inject", onSuccess);
+
             ajax($el, {
-                url: cfgs[0].url,
-                success: onSuccess
+                url: cfgs[0].url
             });
         },
-        _inject: function($source, $target, action, classes) {
+
+        _inject: function($source, $target, action /* , classes */) {
             // action to jquery method mapping, except for "content"
             // and "element"
             var method = {
@@ -23189,11 +23948,11 @@ define('patterns/inject',[
             }[action];
 
             if ($source.length === 0) {
-                log.warn('Aborting injection, source not found:', $source);
+                log.warn("Aborting injection, source not found:", $source);
                 return false;
             }
             if ($target.length === 0) {
-                log.warn('Aborting injection, target not found:', $target);
+                log.warn("Aborting injection, target not found:", $target);
                 return false;
             }
 
@@ -23206,6 +23965,7 @@ define('patterns/inject',[
 
             return true;
         },
+
         _sourcesFromHtml: function(html, url, sources) {
             var $html = _._parseRawHtml(html, url);
             return sources.map(function(source) {
@@ -23215,77 +23975,128 @@ define('patterns/inject',[
                 var $source = $html.find(source);
 
                 if ($source.length === 0)
-                    log.warn('No source elements for selector:', source, $html);
+                    log.warn("No source elements for selector:", source, $html);
 
                 return $source;
             });
         },
+
+        _link_attributes: {
+            A: "href",
+            FORM: "action",
+            IMG: "src"
+        },
+
         _parseRawHtml: function(html, url) {
             url = url || "";
-            var $html;
-            $html = $('<div/>').html(
-                html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+
+            // remove script tags and head and replace body by a div
+            var clean_html = html
+                    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
                     .replace(/<head\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/head>/gi, "")
-                    .replace(/<body(.*)>/gi, '<div id="__original_body">')
-                    .replace(/<\/body(.*)>/gi,'</div>')
-            );
-            // this.(href|action|src) yields absolute uri -> retrieve relative
-            // uris with getAttribute
+                    .replace(/<body([^>]*?)>/gi, "<div id=\"__original_body\">")
+                    .replace(/<\/body([^>]*?)>/gi, "</div>");
+            var $html = $("<div/>").html(clean_html);
+
+            if ($html.children().length === 0)
+                log.warn("Parsing html resulted in empty jquery object:", clean_html);
+
+            // make relative links in _link_attributes relative to current page
             $html.find(":uri(is:relative)").each(function() {
-                switch (this.tagName) {
-                case "A":
-                    this.href=new URI(this.getAttribute("href"))
-                        .absoluteTo(url).toString();
-                    break;
-                case "FORM":
-                    this.action=new URI(this.getAttribute("action"))
-                        .absoluteTo(url).toString();
-                    break;
-                case "IMG":
-                    this.src=new URI(this.getAttribute("src"))
-                        .absoluteTo(url).toString();
-                    break;
+                var attr = _._link_attributes[this.tagName],
+                    rel_url, new_rel_url;
+                if (!attr) {
+                    return;
+                }
+
+                // this.(href|action|src) yields absolute uri -> retrieve relative
+                // uris with getAttribute
+                rel_url = this.getAttribute(attr);
+                if (!rel_url) {
+                    log.info("Skipping empty url for (el, attr)", this, attr);
+                    return;
+                }
+                // leave hash and plone views untouched
+                if ((rel_url[0] === "#") || (rel_url[0] === "@")) {
+                    return;
+                }
+                new_rel_url = new URI(rel_url).absoluteTo(url).toString();
+                if (new_rel_url !== rel_url) {
+                    log.debug("Adjusted url from:", rel_url, "to:", new_rel_url);
+                    this[attr] = new_rel_url;
                 }
             });
             return $html;
         },
+
         // XXX: hack
         _initAutoloadVisible: function($el) {
             // ignore executed autoloads
-            if ($el.data('patterns.inject.autoloaded')) return false;
+            if ($el.data("patterns.inject.autoloaded"))
+                return false;
 
             var $scrollable = $el.parents(":scrollable");
 
             // function to trigger the autoload and mark as triggered
             var trigger = function() {
-                $el.data('patterns.inject.autoloaded', true);
-                $el.trigger('click');
+                $el.data("patterns.inject.autoloaded", true);
+                _.onClick.apply($el[0], []);
                 return true;
             };
 
             // if autoload has no scrollable parent -> trigger it, it is visible
-            if ($scrollable.length === 0) return trigger();
+            if ($scrollable.length === 0)
+                return trigger();
 
             // if scrollable parent and visible -> trigger it
             // we only look at the closest scrollable parent, no nesting
             var checkVisibility = function() {
-                if ($el.data('patterns.autoload')) return false;
+                if ($el.data("patterns.autoload"))
+                    return false;
                 var reltop = $el.offset().top - $scrollable.offset().top - 1000,
                     doTrigger = reltop <= $scrollable.innerHeight();
                 if (doTrigger) {
-                    // checkVisibility was possibly installed as a scroll 
+                    // checkVisibility was possibly installed as a scroll
                     // handler and has now served its purpose -> remove
                     $($scrollable[0]).off("scroll", checkVisibility);
                     return trigger();
                 }
                 return false;
             };
-            if (checkVisibility()) return true;
+            if (checkVisibility())
+                return true;
 
             // wait to become visible - again only immediate scrollable parent
             $($scrollable[0]).on("scroll", checkVisibility);
-            $(window).on('resize.pat-autoload', checkVisibility);
+            $(window).on("resize.pat-autoload", checkVisibility);
             return false;
+        },
+
+        // XXX: simple so far to see what the team thinks of the idea
+        registerTypeHandler: function(type, handler) {
+            _.handlers[type] = handler;
+        },
+
+        callTypeHandler: function(type, fn, context, params) {
+            if (!type) {
+                log.warn("No type specified");
+                return null;
+            }
+
+            if (_.handlers[type] && $.isFunction(_.handlers[type][fn])) {
+                return _.handlers[type][fn].apply(context, params);
+            } else {
+                return null;
+            }
+        },
+
+        handlers: {
+            "html": {
+                sources: function(cfgs, data) {
+                    var sources = cfgs.map(function(cfg) { return cfg.source; });
+                    return _._sourcesFromHtml(data, cfgs[0].url, sources);
+                }
+            }
         }
     };
 
@@ -23394,37 +24205,37 @@ define('core/store',[],function() {
 define('patterns/collapsible',[
     "jquery",
     "./inject",
-    "../logging",
+    "../core/logger",
     "../core/parser",
     "../core/store",
     "../registry"
-], function($, inject, logging, Parser, store, registry) {
-    var log = logging.getLogger("collapsible"),
+], function($, inject, logger, Parser, store, registry) {
+    var log = logger.getLogger("pat.collapsible"),
         parser = new Parser("collapsible");
 
     parser.add_argument("load-content");
     parser.add_argument("store", "none", ["none", "session", "local"]);
-    parser.add_argument("duration", "fast");
-    parser.add_argument("easing", "linear");
+    parser.add_argument("duration", "0.4s");
+    parser.add_argument("easing", "swing");
     parser.add_argument("closed", false);
 
     var _ = {
         name: "collapsible",
         trigger: ".pat-collapsible",
-
+        jquery_plugin: true,
         init: function($el, opts) {
             return $el.each(function() {
                 var $el = $(this),
                     options = _._validateOptions(this, parser.parse($el, opts)),
                 // create collapsible structure
-                    $trigger = $el.children(':first'),
-                    $content = $el.children(':gt(0)'),
-                    $panel, state;
+                    $trigger = $el.children(":first"),
+                    $content = $el.children(":gt(0)"),
+                    $panel, state, storage;
                 if ($content.length > 0)
-                    $panel = $content.wrapAll('<div class="panel-content" />')
+                    $panel = $content.wrapAll("<div class='panel-content' />")
                         .parent();
                 else
-                    $panel = $('<div class="panel-content" />').insertAfter($trigger);
+                    $panel = $("<div class='panel-content' />").insertAfter($trigger);
 
                 $el.data("patternCollapsible", options);
                 state=(options.closed || $el.hasClass("closed")) ? "closed" : "open";
@@ -23459,7 +24270,7 @@ define('patterns/collapsible',[
 
         destroy: function($el) {
             $el.removeData("patternCollapsible");
-            $el.children(":first").off('.pat-collapsible');
+            $el.children(":first").off(".pat-collapsible");
         },
 
         open: function($el) {
@@ -23491,20 +24302,20 @@ define('patterns/collapsible',[
             var options = $el.data("patternCollapsible");
             if (!options.loadContent)
                 return;
-            var components = options.loadContent.split('#'),
+            var components = options.loadContent.split("#"),
                 url = components[0],
-                id = components[1] ? '#' + components[1] : null,
+                id = components[1] ? "#" + components[1] : null,
                 opts = [{
                     url: url,
                     source: id,
-                    $target: $('.panel-content', $el)
+                    $target: $(".panel-content", $el)
                 }];
             inject.execute(opts, $el);
         },
 
         toggle: function($el) {
             var options = $el.data("patternCollapsible"),
-                $panel = $el.find('.panel-content'),
+                $panel = $el.find(".panel-content"),
                 new_state = $el.hasClass("closed") ? "open" : "closed";
 
             if (options.store!=="none") {
@@ -23513,10 +24324,10 @@ define('patterns/collapsible',[
             }
 
             if (new_state==="open") {
-                $el.trigger('patterns-collapsible-open');
+                $el.trigger("patterns-collapsible-open");
                 _._transit($el, $panel, "closed", "open", options);
             } else {
-                $el.trigger('patterns-collapsible-close');
+                $el.trigger("patterns-collapsible-close");
                 _._transit($el, $panel, "open", "closed", options);
             }
 
@@ -23545,152 +24356,1058 @@ define('patterns/collapsible',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
+define('lib/depends_parse',[],function() {
+  /*
+   * Generated by PEG.js 0.7.0.
+   *
+   * http://pegjs.majda.cz/
+   */
+  
+  function quote(s) {
+    /*
+     * ECMA-262, 5th ed., 7.8.4: All characters may appear literally in a
+     * string literal except for the closing quote character, backslash,
+     * carriage return, line separator, paragraph separator, and line feed.
+     * Any character may appear in the form of an escape sequence.
+     *
+     * For portability, we also escape escape all control and non-ASCII
+     * characters. Note that "\0" and "\v" escape sequences are not used
+     * because JSHint does not like the first and IE the second.
+     */
+     return '"' + s
+      .replace(/\\/g, '\\\\')  // backslash
+      .replace(/"/g, '\\"')    // closing quote character
+      .replace(/\x08/g, '\\b') // backspace
+      .replace(/\t/g, '\\t')   // horizontal tab
+      .replace(/\n/g, '\\n')   // line feed
+      .replace(/\f/g, '\\f')   // form feed
+      .replace(/\r/g, '\\r')   // carriage return
+      .replace(/[\x00-\x07\x0B\x0E-\x1F\x80-\uFFFF]/g, escape)
+      + '"';
+  }
+  
+  var result = {
+    /*
+     * Parses the input with a generated parser. If the parsing is successfull,
+     * returns a value explicitly or implicitly specified by the grammar from
+     * which the parser was generated (see |PEG.buildParser|). If the parsing is
+     * unsuccessful, throws |PEG.parser.SyntaxError| describing the error.
+     */
+    parse: function(input, startRule) {
+      var parseFunctions = {
+        "expression": parse_expression,
+        "simple_expression": parse_simple_expression,
+        "equal_comparison": parse_equal_comparison,
+        "order_comparison": parse_order_comparison,
+        "logical": parse_logical,
+        "identifier": parse_identifier,
+        "value": parse_value,
+        "number": parse_number,
+        "_": parse__,
+        "__": parse___,
+        "WhiteSpace": parse_WhiteSpace,
+        "Zs": parse_Zs
+      };
+      
+      if (startRule !== undefined) {
+        if (parseFunctions[startRule] === undefined) {
+          throw new Error("Invalid rule name: " + quote(startRule) + ".");
+        }
+      } else {
+        startRule = "expression";
+      }
+      
+      var pos = 0;
+      var reportFailures = 0;
+      var rightmostFailuresPos = 0;
+      var rightmostFailuresExpected = [];
+      
+      function padLeft(input, padding, length) {
+        var result = input;
+        
+        var padLength = length - input.length;
+        for (var i = 0; i < padLength; i++) {
+          result = padding + result;
+        }
+        
+        return result;
+      }
+      
+      function escape(ch) {
+        var charCode = ch.charCodeAt(0);
+        var escapeChar;
+        var length;
+        
+        if (charCode <= 0xFF) {
+          escapeChar = 'x';
+          length = 2;
+        } else {
+          escapeChar = 'u';
+          length = 4;
+        }
+        
+        return '\\' + escapeChar + padLeft(charCode.toString(16).toUpperCase(), '0', length);
+      }
+      
+      function matchFailed(failure) {
+        if (pos < rightmostFailuresPos) {
+          return;
+        }
+        
+        if (pos > rightmostFailuresPos) {
+          rightmostFailuresPos = pos;
+          rightmostFailuresExpected = [];
+        }
+        
+        rightmostFailuresExpected.push(failure);
+      }
+      
+      function parse_expression() {
+        var result0, result1, result2, result3, result4;
+        var pos0, pos1;
+        
+        pos0 = pos;
+        pos1 = pos;
+        if (input.substr(pos, 3).toLowerCase() === "not") {
+          result0 = input.substr(pos, 3);
+          pos += 3;
+        } else {
+          result0 = null;
+          if (reportFailures === 0) {
+            matchFailed("\"not\"");
+          }
+        }
+        if (result0 !== null) {
+          result1 = parse__();
+          if (result1 !== null) {
+            result2 = parse_simple_expression();
+            if (result2 !== null) {
+              result0 = [result0, result1, result2];
+            } else {
+              result0 = null;
+              pos = pos1;
+            }
+          } else {
+            result0 = null;
+            pos = pos1;
+          }
+        } else {
+          result0 = null;
+          pos = pos1;
+        }
+        if (result0 !== null) {
+          result0 = (function(offset, node) {
+                return {type: "NOT", children: [node]};
+            })(pos0, result0[2]);
+        }
+        if (result0 === null) {
+          pos = pos0;
+        }
+        if (result0 === null) {
+          pos0 = pos;
+          pos1 = pos;
+          result0 = parse_simple_expression();
+          if (result0 !== null) {
+            result1 = parse__();
+            if (result1 !== null) {
+              result2 = parse_logical();
+              if (result2 !== null) {
+                result3 = parse__();
+                if (result3 !== null) {
+                  result4 = parse_expression();
+                  if (result4 !== null) {
+                    result0 = [result0, result1, result2, result3, result4];
+                  } else {
+                    result0 = null;
+                    pos = pos1;
+                  }
+                } else {
+                  result0 = null;
+                  pos = pos1;
+                }
+              } else {
+                result0 = null;
+                pos = pos1;
+              }
+            } else {
+              result0 = null;
+              pos = pos1;
+            }
+          } else {
+            result0 = null;
+            pos = pos1;
+          }
+          if (result0 !== null) {
+            result0 = (function(offset, left, type, right) {
+                  return {type: type.toUpperCase(), children: [left, right]};
+              })(pos0, result0[0], result0[2], result0[4]);
+          }
+          if (result0 === null) {
+            pos = pos0;
+          }
+          if (result0 === null) {
+            pos0 = pos;
+            result0 = parse_simple_expression();
+            if (result0 !== null) {
+              result0 = (function(offset, node) { return node; })(pos0, result0);
+            }
+            if (result0 === null) {
+              pos = pos0;
+            }
+          }
+        }
+        return result0;
+      }
+      
+      function parse_simple_expression() {
+        var result0, result1, result2, result3, result4;
+        var pos0, pos1;
+        
+        pos0 = pos;
+        pos1 = pos;
+        if (input.charCodeAt(pos) === 40) {
+          result0 = "(";
+          pos++;
+        } else {
+          result0 = null;
+          if (reportFailures === 0) {
+            matchFailed("\"(\"");
+          }
+        }
+        if (result0 !== null) {
+          result1 = parse___();
+          if (result1 !== null) {
+            result2 = parse_expression();
+            if (result2 !== null) {
+              result3 = parse___();
+              if (result3 !== null) {
+                if (input.charCodeAt(pos) === 41) {
+                  result4 = ")";
+                  pos++;
+                } else {
+                  result4 = null;
+                  if (reportFailures === 0) {
+                    matchFailed("\")\"");
+                  }
+                }
+                if (result4 !== null) {
+                  result0 = [result0, result1, result2, result3, result4];
+                } else {
+                  result0 = null;
+                  pos = pos1;
+                }
+              } else {
+                result0 = null;
+                pos = pos1;
+              }
+            } else {
+              result0 = null;
+              pos = pos1;
+            }
+          } else {
+            result0 = null;
+            pos = pos1;
+          }
+        } else {
+          result0 = null;
+          pos = pos1;
+        }
+        if (result0 !== null) {
+          result0 = (function(offset, content) {
+                return content;
+            })(pos0, result0[2]);
+        }
+        if (result0 === null) {
+          pos = pos0;
+        }
+        if (result0 === null) {
+          pos0 = pos;
+          pos1 = pos;
+          result0 = parse_identifier();
+          if (result0 !== null) {
+            result1 = parse___();
+            if (result1 !== null) {
+              result2 = parse_equal_comparison();
+              if (result2 !== null) {
+                result3 = parse___();
+                if (result3 !== null) {
+                  result4 = parse_value();
+                  if (result4 !== null) {
+                    result0 = [result0, result1, result2, result3, result4];
+                  } else {
+                    result0 = null;
+                    pos = pos1;
+                  }
+                } else {
+                  result0 = null;
+                  pos = pos1;
+                }
+              } else {
+                result0 = null;
+                pos = pos1;
+              }
+            } else {
+              result0 = null;
+              pos = pos1;
+            }
+          } else {
+            result0 = null;
+            pos = pos1;
+          }
+          if (result0 !== null) {
+            result0 = (function(offset, input, op, value) {
+                  return {type: "comparison", operator: op, input: input, value: value};
+              })(pos0, result0[0], result0[2], result0[4]);
+          }
+          if (result0 === null) {
+            pos = pos0;
+          }
+          if (result0 === null) {
+            pos0 = pos;
+            pos1 = pos;
+            result0 = parse_identifier();
+            if (result0 !== null) {
+              result1 = parse___();
+              if (result1 !== null) {
+                result2 = parse_order_comparison();
+                if (result2 !== null) {
+                  result3 = parse___();
+                  if (result3 !== null) {
+                    result4 = parse_number();
+                    if (result4 !== null) {
+                      result0 = [result0, result1, result2, result3, result4];
+                    } else {
+                      result0 = null;
+                      pos = pos1;
+                    }
+                  } else {
+                    result0 = null;
+                    pos = pos1;
+                  }
+                } else {
+                  result0 = null;
+                  pos = pos1;
+                }
+              } else {
+                result0 = null;
+                pos = pos1;
+              }
+            } else {
+              result0 = null;
+              pos = pos1;
+            }
+            if (result0 !== null) {
+              result0 = (function(offset, input, op, value) {
+                    return {type: "comparison", operator: op, input: input, value: value};
+                })(pos0, result0[0], result0[2], result0[4]);
+            }
+            if (result0 === null) {
+              pos = pos0;
+            }
+            if (result0 === null) {
+              pos0 = pos;
+              result0 = parse_identifier();
+              if (result0 !== null) {
+                result0 = (function(offset, input) {
+                      return {type: "truthy", input: input};
+                  })(pos0, result0);
+              }
+              if (result0 === null) {
+                pos = pos0;
+              }
+            }
+          }
+        }
+        return result0;
+      }
+      
+      function parse_equal_comparison() {
+        var result0;
+        
+        reportFailures++;
+        if (input.charCodeAt(pos) === 61) {
+          result0 = "=";
+          pos++;
+        } else {
+          result0 = null;
+          if (reportFailures === 0) {
+            matchFailed("\"=\"");
+          }
+        }
+        if (result0 === null) {
+          if (input.substr(pos, 2) === "!=") {
+            result0 = "!=";
+            pos += 2;
+          } else {
+            result0 = null;
+            if (reportFailures === 0) {
+              matchFailed("\"!=\"");
+            }
+          }
+        }
+        reportFailures--;
+        if (reportFailures === 0 && result0 === null) {
+          matchFailed("comparison operator");
+        }
+        return result0;
+      }
+      
+      function parse_order_comparison() {
+        var result0;
+        
+        reportFailures++;
+        if (input.substr(pos, 2) === "<=") {
+          result0 = "<=";
+          pos += 2;
+        } else {
+          result0 = null;
+          if (reportFailures === 0) {
+            matchFailed("\"<=\"");
+          }
+        }
+        if (result0 === null) {
+          if (input.charCodeAt(pos) === 60) {
+            result0 = "<";
+            pos++;
+          } else {
+            result0 = null;
+            if (reportFailures === 0) {
+              matchFailed("\"<\"");
+            }
+          }
+          if (result0 === null) {
+            if (input.substr(pos, 2) === ">=") {
+              result0 = ">=";
+              pos += 2;
+            } else {
+              result0 = null;
+              if (reportFailures === 0) {
+                matchFailed("\">=\"");
+              }
+            }
+            if (result0 === null) {
+              if (input.charCodeAt(pos) === 62) {
+                result0 = ">";
+                pos++;
+              } else {
+                result0 = null;
+                if (reportFailures === 0) {
+                  matchFailed("\">\"");
+                }
+              }
+            }
+          }
+        }
+        reportFailures--;
+        if (reportFailures === 0 && result0 === null) {
+          matchFailed("comparison operator");
+        }
+        return result0;
+      }
+      
+      function parse_logical() {
+        var result0;
+        
+        reportFailures++;
+        if (input.substr(pos, 3).toLowerCase() === "and") {
+          result0 = input.substr(pos, 3);
+          pos += 3;
+        } else {
+          result0 = null;
+          if (reportFailures === 0) {
+            matchFailed("\"and\"");
+          }
+        }
+        if (result0 === null) {
+          if (input.substr(pos, 2).toLowerCase() === "or") {
+            result0 = input.substr(pos, 2);
+            pos += 2;
+          } else {
+            result0 = null;
+            if (reportFailures === 0) {
+              matchFailed("\"or\"");
+            }
+          }
+        }
+        reportFailures--;
+        if (reportFailures === 0 && result0 === null) {
+          matchFailed("logical operator");
+        }
+        return result0;
+      }
+      
+      function parse_identifier() {
+        var result0, result1;
+        var pos0;
+        
+        reportFailures++;
+        pos0 = pos;
+        if (/^[A-Za-z0-9._\-]/.test(input.charAt(pos))) {
+          result1 = input.charAt(pos);
+          pos++;
+        } else {
+          result1 = null;
+          if (reportFailures === 0) {
+            matchFailed("[A-Za-z0-9._\\-]");
+          }
+        }
+        if (result1 !== null) {
+          result0 = [];
+          while (result1 !== null) {
+            result0.push(result1);
+            if (/^[A-Za-z0-9._\-]/.test(input.charAt(pos))) {
+              result1 = input.charAt(pos);
+              pos++;
+            } else {
+              result1 = null;
+              if (reportFailures === 0) {
+                matchFailed("[A-Za-z0-9._\\-]");
+              }
+            }
+          }
+        } else {
+          result0 = null;
+        }
+        if (result0 !== null) {
+          result0 = (function(offset, chars) {
+              return chars.join("");
+          })(pos0, result0);
+        }
+        if (result0 === null) {
+          pos = pos0;
+        }
+        reportFailures--;
+        if (reportFailures === 0 && result0 === null) {
+          matchFailed("input name");
+        }
+        return result0;
+      }
+      
+      function parse_value() {
+        var result0, result1;
+        var pos0;
+        
+        reportFailures++;
+        pos0 = pos;
+        if (/^[A-Za-z0-9._\-]/.test(input.charAt(pos))) {
+          result1 = input.charAt(pos);
+          pos++;
+        } else {
+          result1 = null;
+          if (reportFailures === 0) {
+            matchFailed("[A-Za-z0-9._\\-]");
+          }
+        }
+        if (result1 !== null) {
+          result0 = [];
+          while (result1 !== null) {
+            result0.push(result1);
+            if (/^[A-Za-z0-9._\-]/.test(input.charAt(pos))) {
+              result1 = input.charAt(pos);
+              pos++;
+            } else {
+              result1 = null;
+              if (reportFailures === 0) {
+                matchFailed("[A-Za-z0-9._\\-]");
+              }
+            }
+          }
+        } else {
+          result0 = null;
+        }
+        if (result0 !== null) {
+          result0 = (function(offset, chars) {
+              return chars.join("");
+          })(pos0, result0);
+        }
+        if (result0 === null) {
+          pos = pos0;
+        }
+        reportFailures--;
+        if (reportFailures === 0 && result0 === null) {
+          matchFailed("value");
+        }
+        return result0;
+      }
+      
+      function parse_number() {
+        var result0, result1;
+        var pos0;
+        
+        reportFailures++;
+        pos0 = pos;
+        if (/^[0-9]/.test(input.charAt(pos))) {
+          result1 = input.charAt(pos);
+          pos++;
+        } else {
+          result1 = null;
+          if (reportFailures === 0) {
+            matchFailed("[0-9]");
+          }
+        }
+        if (result1 !== null) {
+          result0 = [];
+          while (result1 !== null) {
+            result0.push(result1);
+            if (/^[0-9]/.test(input.charAt(pos))) {
+              result1 = input.charAt(pos);
+              pos++;
+            } else {
+              result1 = null;
+              if (reportFailures === 0) {
+                matchFailed("[0-9]");
+              }
+            }
+          }
+        } else {
+          result0 = null;
+        }
+        if (result0 !== null) {
+          result0 = (function(offset, digits) {
+              return parseInt(digits.join(""), 10);
+          })(pos0, result0);
+        }
+        if (result0 === null) {
+          pos = pos0;
+        }
+        reportFailures--;
+        if (reportFailures === 0 && result0 === null) {
+          matchFailed("number");
+        }
+        return result0;
+      }
+      
+      function parse__() {
+        var result0, result1;
+        
+        result1 = parse_WhiteSpace();
+        if (result1 !== null) {
+          result0 = [];
+          while (result1 !== null) {
+            result0.push(result1);
+            result1 = parse_WhiteSpace();
+          }
+        } else {
+          result0 = null;
+        }
+        return result0;
+      }
+      
+      function parse___() {
+        var result0, result1;
+        
+        result0 = [];
+        result1 = parse_WhiteSpace();
+        while (result1 !== null) {
+          result0.push(result1);
+          result1 = parse_WhiteSpace();
+        }
+        return result0;
+      }
+      
+      function parse_WhiteSpace() {
+        var result0;
+        
+        reportFailures++;
+        if (/^[\t\x0B\f \xA0\uFEFF]/.test(input.charAt(pos))) {
+          result0 = input.charAt(pos);
+          pos++;
+        } else {
+          result0 = null;
+          if (reportFailures === 0) {
+            matchFailed("[\\t\\x0B\\f \\xA0\\uFEFF]");
+          }
+        }
+        if (result0 === null) {
+          result0 = parse_Zs();
+        }
+        reportFailures--;
+        if (reportFailures === 0 && result0 === null) {
+          matchFailed("whitespace");
+        }
+        return result0;
+      }
+      
+      function parse_Zs() {
+        var result0;
+        
+        if (/^[ \xA0\u1680\u180E\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A\u202F\u205F\u3000]/.test(input.charAt(pos))) {
+          result0 = input.charAt(pos);
+          pos++;
+        } else {
+          result0 = null;
+          if (reportFailures === 0) {
+            matchFailed("[ \\xA0\\u1680\\u180E\\u2000\\u2001\\u2002\\u2003\\u2004\\u2005\\u2006\\u2007\\u2008\\u2009\\u200A\\u202F\\u205F\\u3000]");
+          }
+        }
+        return result0;
+      }
+      
+      
+      function cleanupExpected(expected) {
+        expected.sort();
+        
+        var lastExpected = null;
+        var cleanExpected = [];
+        for (var i = 0; i < expected.length; i++) {
+          if (expected[i] !== lastExpected) {
+            cleanExpected.push(expected[i]);
+            lastExpected = expected[i];
+          }
+        }
+        return cleanExpected;
+      }
+      
+      function computeErrorPosition() {
+        /*
+         * The first idea was to use |String.split| to break the input up to the
+         * error position along newlines and derive the line and column from
+         * there. However IE's |split| implementation is so broken that it was
+         * enough to prevent it.
+         */
+        
+        var line = 1;
+        var column = 1;
+        var seenCR = false;
+        
+        for (var i = 0; i < Math.max(pos, rightmostFailuresPos); i++) {
+          var ch = input.charAt(i);
+          if (ch === "\n") {
+            if (!seenCR) { line++; }
+            column = 1;
+            seenCR = false;
+          } else if (ch === "\r" || ch === "\u2028" || ch === "\u2029") {
+            line++;
+            column = 1;
+            seenCR = true;
+          } else {
+            column++;
+            seenCR = false;
+          }
+        }
+        
+        return { line: line, column: column };
+      }
+      
+      
+      var result = parseFunctions[startRule]();
+      
+      /*
+       * The parser is now in one of the following three states:
+       *
+       * 1. The parser successfully parsed the whole input.
+       *
+       *    - |result !== null|
+       *    - |pos === input.length|
+       *    - |rightmostFailuresExpected| may or may not contain something
+       *
+       * 2. The parser successfully parsed only a part of the input.
+       *
+       *    - |result !== null|
+       *    - |pos < input.length|
+       *    - |rightmostFailuresExpected| may or may not contain something
+       *
+       * 3. The parser did not successfully parse any part of the input.
+       *
+       *   - |result === null|
+       *   - |pos === 0|
+       *   - |rightmostFailuresExpected| contains at least one failure
+       *
+       * All code following this comment (including called functions) must
+       * handle these states.
+       */
+      if (result === null || pos !== input.length) {
+        var offset = Math.max(pos, rightmostFailuresPos);
+        var found = offset < input.length ? input.charAt(offset) : null;
+        var errorPosition = computeErrorPosition();
+        
+        throw new this.SyntaxError(
+          cleanupExpected(rightmostFailuresExpected),
+          found,
+          offset,
+          errorPosition.line,
+          errorPosition.column
+        );
+      }
+      
+      return result;
+    },
+    
+    /* Returns the parser source code. */
+    toSource: function() { return this._source; }
+  };
+  
+  /* Thrown when a parser encounters a syntax error. */
+  
+  result.SyntaxError = function(expected, found, offset, line, column) {
+    function buildMessage(expected, found) {
+      var expectedHumanized, foundHumanized;
+      
+      switch (expected.length) {
+        case 0:
+          expectedHumanized = "end of input";
+          break;
+        case 1:
+          expectedHumanized = expected[0];
+          break;
+        default:
+          expectedHumanized = expected.slice(0, expected.length - 1).join(", ")
+            + " or "
+            + expected[expected.length - 1];
+      }
+      
+      foundHumanized = found ? quote(found) : "end of input";
+      
+      return "Expected " + expectedHumanized + " but " + foundHumanized + " found.";
+    }
+    
+    this.name = "SyntaxError";
+    this.expected = expected;
+    this.found = found;
+    this.message = buildMessage(expected, found);
+    this.offset = offset;
+    this.line = line;
+    this.column = column;
+  };
+  
+  result.SyntaxError.prototype = Error.prototype;
+  
+  return result;
+});
+
+define('lib/dependshandler',[
+    "jquery",
+    "./depends_parse"
+], function($, parser) {
+    function DependsHandler($el, expression) {
+        var $context = $el.closest("form");
+        if (!$context.length)
+            $context=$(document);
+        this.$el=$el;
+        this.$context=$context;
+        this.ast=parser.parse(expression);  // TODO: handle parse exceptions here
+    }
+
+    DependsHandler.prototype = {
+        _findInputs: function(name) {
+            var $input = this.$context.find(":input[name="+name+"]");
+            if (!$input.length)
+                $input=$("#"+name);
+            return $input;
+        },
+
+        _getValue: function(name) {
+            var $input = this._findInputs(name);
+            if (!$input.length)
+                return null;
+
+            if ($input.attr("type")==="radio" || $input.attr("type")==="checkbox")
+                return $input.filter(":checked").val() || null;
+            else
+                return $input.val();
+        },
+        
+        getAllInputs: function() {
+            var todo = [this.ast],
+                $inputs = $(),
+                node;
+
+            while (todo.length) {
+                node=todo.shift();
+                if (node.input)
+                    $inputs=$inputs.add(this._findInputs(node.input));
+                if (node.children && node.children.length)
+                    todo.push.apply(todo, node.children);
+            }
+            return $inputs;
+        },
+
+        _evaluate: function(node) {
+            var value = node.input ? this._getValue(node.input) : null,
+                i;
+
+            switch (node.type) {
+                case "NOT":
+                    return !this._evaluate(node.children[0]);
+                case "AND":
+                    for (i=0; i<node.children.length; i++)
+                        if (!this._evaluate(node.children[i]))
+                            return false;
+                    return true;
+                case "OR":
+                    for (i=0; i<node.children.length; i++)
+                        if (this._evaluate(node.children[i]))
+                            return true;
+                    return false;
+                case "comparison":
+                    switch (node.operator) {
+                        case "=":
+                            return node.value==value;
+                        case "!=":
+                            return node.value!=value;
+                        case "<=":
+                            return value<=node.value;
+                        case "<":
+                            return value<node.value;
+                        case ">":
+                            return value>node.value;
+                        case ">=":
+                            return value>=node.value;
+                    }
+                    break;
+                case "truthy":
+                    return !!value;
+            }
+        },
+
+        evaluate: function() {
+            return this._evaluate(this.ast);
+        }
+    };
+
+    return DependsHandler;
+});
+
+
 define('patterns/depends',[
     "jquery",
     "../registry",
+    "../core/logger",
+    "../lib/dependshandler",
     "../core/parser"
-], function($, patterns, Parser) {
-    var parser = new Parser("depends");
+], function($, patterns, logging, DependsHandler, Parser) {
+    var log = logging.getLogger("depends"),
+        parser = new Parser("depends");
 
-    parser.add_argument("name");
-    parser.add_argument("operator", "on");
-    parser.add_argument("value");
-    parser.add_argument("type", "and");
-    parser.add_argument("action", "show");
+    parser.add_argument("condition");
+    parser.add_argument("action", "show", ["show", "enable"]);
+    parser.add_argument("transition", "none", ["none", "css", "fade", "slide"]);
+    parser.add_argument("effect-duration", "fast");
 
     var depends = {
         name: "depends",
         trigger: ".pat-depends",
-        jquery_plugin: "patternDepends",
+        jquery_plugin: true,
 
-        verify: function($slave, command) {
-            var result=[],
-                $form = $slave.closest("form"),
-                $input, i, value, test;
-
-            if (!$form.length)
-                $form=$(document);
-
-            for (i=0; i<command.on.length; i++) {
-                test=command.on[i];
-
-                $input = $form.find(":input[name="+test.name+"]");
-                if (!$input.length) {
-                    result.push(false);
-                    continue;
-                }
-
-                if ($input.attr("type")==="radio" || $input.attr("type")==="checkbox")
-                    value = $input.filter(":checked").val();
-                else
-                    value = $input.val();
-
-                if (test.operator==="on" && !value) {
-                    result.push(false);
-                    continue;
-                } else if (test.operator==="off" && value) {
-                    result.push(false);
-                    continue;
-                } else if (test.value) {
-                    if (test.operator==="equals" && test.value!==value) {
-                        result.push(false);
-                        continue;
-                    } else if (test.operator==="notEquals" && test.value===value) {
-                        result.push(false);
-                        continue;
-                    }
-                }
-                result.push(true);
-            }
-
-            if (command.type==="or") {
-                for (i=0; i<result.length; i++) {
-                    if (result[i])
-                        return true;
-                }
-                return false;
-            } else {
-                for (i=0; i<result.length; i++)
-                    if (!result[i])
-                        return false;
-                return true;
-            }
+        transitions: {
+            none: {hide: "hide", show: "show"},
+            fade: {hide: "fadeOut", show: "fadeIn"},
+            slide: {hide: "slideUp", show: "slideDown"}
         },
 
-        getMasters: function($slave, command) {
-            var $result = $(),
-                $form = $slave.closest("form"),
-                i, test;
-
-            if (!$form.length)
-                $form=$(document);
-
-            for (i=0; i<command.on.length; i++) {
-                test=command.on[i];
-                if (!test)
-                    continue;
-
-                $result=$result.add($form.find(":input[name="+test.name+"]"));
-            }
-
-            return $result;
-        },
-
-        parse: function($el, opts) {
-            var options = parser.parse($el, opts, true);
-            var command = {"on" : options,
-                           "action" : "show",
-                           "type": "and"
-                           };
-            if (options[0].action)
-                command.action=options[0].action;
-            if (options[0].type)
-                command.type=options[0].type;
-            return command;
-        },
-
-        init: function($root, opts) {
-            return $root.each(function() {
+        init: function($el, opts) {
+            return $el.each(function() {
                 var slave = this,
                     $slave = $(this),
-                    command, state;
+                    options = parser.parse($slave, opts),
+                    handler, state;
 
-                command=depends.parse($slave, opts);
-                state=depends.verify($slave, command);
-
-                if (command.action==="show") {
-                    if (state)
-                        $slave.show();
-                    else
-                        $slave.hide();
-                } else if (command.action==="enable") {
-                    if (state) {
-                        slave.disabled=null;
-                        $slave.removeClass("disabled");
-                    } else {
-                        slave.disabled="disabled";
-                        $slave.addClass("disabled");
-                    }
+                try {
+                    handler=new DependsHandler($slave, options.condition);
+                } catch (e) {
+                    log.error("Invalid condition: " + e.message);
+                    return;
                 }
 
-                depends.getMasters($slave, command).on("change.pat-depends", function() {
-                    state=depends.verify($slave, command);
-                    if (command.action==="show") {
+                state=handler.evaluate();
+                switch (options.action) {
+                    case "show":
                         if (state)
-                            $slave.slideDown();
+                            $slave.show();
                         else
-                            $slave.slideUp();
-                    } else if (command.action==="enable" ) {
-                        if (state) {
-                            slave.disabled=null;
-                            $slave.removeClass("disabled");
-                        } else {
-                            slave.disabled="disabled";
-                            $slave.addClass("disabled");
-                        }
+                            $slave.hide();
+                        break;
+                    case "enable":
+                        if (state)
+                            depends._enable($slave);
+                        else
+                            depends._disable($slave);
+                        break;
+                }
+
+                var data = {handler: handler,
+                            options: options,
+                            slave: slave};
+
+                handler.getAllInputs().each(function() {
+                    if (this.form) {
+                        var $form = $(this.form),
+                            slaves = $form.data("patDepends.slaves");
+                        if (!slaves) {
+                            slaves=[data];
+                            $form.on("reset.pat-depends", depends.onReset);
+                        } else if (slaves.indexOf(data)===-1)
+                            slaves.push(data);
+                        $form.data("patDepends.slaves", slaves);
                     }
+                    $(this).on("change.pat-depends", null, data, depends.onChange);
                 });
             });
+        },
+
+        onReset: function(event) {
+            var slaves = $(this).data("patDepends.slaves"),
+                i;
+
+            setTimeout(function() {
+                for (i=0; i<slaves.length; i++) {
+                    event.data=slaves[i];
+                    depends.onChange(event);
+                }
+            }, 50);
+        },
+
+        _enable: function($slave) {
+            if ($slave.is(":input"))
+                $slave[0].disabled=null;
+            else if ($slave.is("a"))
+                $slave.off("click.patternDepends");
+            $slave.removeClass("disabled");
+        },
+
+        _disable: function($slave) {
+            if ($slave.is(":input"))
+                $slave[0].disabled="disabled";
+            else if ($slave.is("a"))
+                $slave.on("click.patternDepends", depends.blockDefault);
+            $slave.addClass("disabled");
+        },
+
+        onChange: function(event) {
+            var handler = event.data.handler,
+                options = event.data.options,
+                slave = event.data.slave,
+                $slave = $(slave),
+                state = handler.evaluate();
+
+            switch (options.action) {
+                case "show":
+                    $slave.removeClass("visible hidden in-progress");
+                    if (options.transition==="css")
+                        $slave.addClass(state ? "visible" : "hidden");
+                    else {
+                        var t = depends.transitions[options.transition],
+                            duration = (options.transition==="none" ? null : options.effectDuration);
+                        if (duration)
+                            $slave.addClass("in-progress");
+                        $slave[state ? t.show : t.hide](duration, function() {
+                            $slave
+                                .removeClass("visible in-progress hidden")
+                                .addClass(state ? "visible" : "hidden");
+                        });
+                    }
+                    break;
+                case "enable":
+                    if (state)
+                        depends._enable($slave);
+                    else
+                        depends._disable($slave);
+                    break;
+            }
+        },
+
+        blockDefault: function(event) {
+            event.preventDefault();
         }
     };
 
@@ -23701,6 +25418,84 @@ define('patterns/depends',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
+/*!
+ * jQuery TextChange Plugin
+ * http://www.zurb.com/playground/jquery-text-change-custom-event
+ *
+ * Copyright 2010, ZURB
+ * Released under the MIT License
+ */
+(function ($) {
+	
+	$.event.special.textchange = {
+		
+		setup: function (data, namespaces) {
+		  $(this).data('lastValue', this.contentEditable === 'true' ? $(this).html() : $(this).val());
+			$(this).bind('keyup.textchange', $.event.special.textchange.handler);
+			$(this).bind('cut.textchange paste.textchange input.textchange', $.event.special.textchange.delayedHandler);
+		},
+		
+		teardown: function (namespaces) {
+			$(this).unbind('.textchange');
+		},
+		
+		handler: function (event) {
+			$.event.special.textchange.triggerIfChanged($(this));
+		},
+		
+		delayedHandler: function (event) {
+			var element = $(this);
+			setTimeout(function () {
+				$.event.special.textchange.triggerIfChanged(element);
+			}, 25);
+		},
+		
+		triggerIfChanged: function (element) {
+		  var current = element[0].contentEditable === 'true' ? element.html() : element.val();
+			if (current !== element.data('lastValue')) {
+				element.trigger('textchange',  [element.data('lastValue')]);
+				element.data('lastValue', current);
+			}
+		}
+	};
+	
+	$.event.special.hastext = {
+		
+		setup: function (data, namespaces) {
+			$(this).bind('textchange', $.event.special.hastext.handler);
+		},
+		
+		teardown: function (namespaces) {
+			$(this).unbind('textchange', $.event.special.hastext.handler);
+		},
+		
+		handler: function (event, lastValue) {
+			if ((lastValue === '') && lastValue !== $(this).val()) {
+				$(this).trigger('hastext');
+			}
+		}
+	};
+	
+	$.event.special.notext = {
+		
+		setup: function (data, namespaces) {
+			$(this).bind('textchange', $.event.special.notext.handler);
+		},
+		
+		teardown: function (namespaces) {
+			$(this).unbind('textchange', $.event.special.notext.handler);
+		},
+		
+		handler: function (event, lastValue) {
+			if ($(this).val() === '' && $(this).val() !== lastValue) {
+				$(this).trigger('notext');
+			}
+		}
+	};	
+
+})(jQuery);
+define("jquery_textchange", ["jquery"], function(){});
+
 // FILE IS GENERATED BY COMBINING THE SOURCES IN THE "classes" DIRECTORY SO DON'T MODIFY THIS FILE DIRECTLY
 (function(win) {
 	var whiteSpaceRe = /^\s*|\s*$/g,
@@ -42697,54 +44492,104 @@ tinymce.onAddEditor.add(function(tinymce, ed) {
 define("tinymce", function(){});
 
 define('patterns/edit-tinymce',[
-    'jquery',
-    '../lib/ajax',
-    '../logging',
-    '../registry',
-    'tinymce'
-], function($, ajax, logging, registry) {
-    var log = logging.getLogger('editTinyMCE');
+    "jquery",
+    "../lib/ajax",
+    "../core/parser",
+    "../core/logger",
+    "../registry",
+    "../utils",
+    "URIjs/URI",
+    "jquery_textchange",
+    "tinymce"
+], function($, ajax, Parser, logger, registry, utils, URI) {
+    var log = logger.getLogger("pat.editTinyMCE"),
+        parser = new Parser("edit-tinymce");
+
+    parser.add_argument("tinymce-baseurl");
 
     var _ = {
         name: "editTinyMCE",
-        trigger: 'form textarea.pat-edit-tinymce',
+        trigger: "form textarea.pat-edit-tinymce",
         init: function($el, opts) {
-            var $form = $el.parents('form'),
-                $resetbtn = $form.find('[type=reset]'),
-                id = $el.attr('id');
+            var $form = $el.parents("form"),
+                id = $el.attr("id");
 
             // make sure the textarea has an id
             if (!id) {
-                var formid = $form.attr('id'),
-                    name = $el.attr('name');
+                var formid = $form.attr("id"),
+                    name = $el.attr("name");
                 if (!formid) {
-                    log.error('Textarea or parent form needs an id', $el, $form);
+                    log.error("Textarea or parent form needs an id", $el, $form);
                     return false;
                 }
                 if (!name) {
-                    log.error('Textarea needs a name', $el);
+                    log.error("Textarea needs a name", $el);
                     return false;
                 }
-                id = formid + '_' + name;
-                if ($('#'+id).length > 0) {
-                    log.error('Textarea needs an id', $el);
+                id = formid + "_" + name;
+                if ($("#"+id).length > 0) {
+                    log.error("Textarea needs an id", $el);
                     return false;
                 }
                 $el.attr({id: id});
             }
 
             // read configuration
-            var cfg = $el.data('tinymce-json');
+            var cfg = $el.data("tinymce-json");
             if (!cfg) {
-                log.info('data-tinymce-json empty, using default config', $el);
+                log.info("data-tinymce-json empty, using default config", $el);
                 cfg = {};
             }
             cfg.elements = id;
-            cfg.mode = 'exact';
-            cfg.readonly = Boolean($el.attr('readonly'));
+            cfg.mode = "exact";
+            cfg.readonly = Boolean($el.attr("readonly"));
+
+            // get arguments
+            var args = parser.parse($el, opts);
+
+            if (!args.tinymceBaseurl) {
+                log.error("tinymce-baseurl has to point to TinyMCE resources");
+                return false;
+            }
+
+            var u = new URI();
+            u._parts.query = null;
+
+            // handle rebasing of own urls if we were injected
+            var parents = $el.parents().filter(function() {
+                return $(this).data("pat-injected");
+            });
+            if (parents.length)
+                u = URI(parents.first().data("pat-injected").origin).absoluteTo(u);
+            if (cfg.content_css)
+                cfg.content_css = URI(cfg.content_css).absoluteTo(u).toString();
+            tinyMCE.baseURL = URI(args.tinymceBaseurl).absoluteTo(u).toString();
+            tinyMCE.baseURI = new tinyMCE.util.URI(tinyMCE.baseURL);
+
+            var $tinymce, $tinyifr,
+                propagate = function(ev) {
+                    $tinyifr.trigger(ev);
+                };
+            cfg.oninit = function() {
+                // find tiny's iframe and edit field
+                $tinyifr = $("#" + id + "_ifr");
+                $tinymce = $tinyifr.contents().find("#tinymce");
+
+                // propagate first textchange event outside the iframe
+                $tinymce.one("textchange.pat-tinymce", propagate)
+                    .one("change.pat-tinymce", propagate);
+            };
+
+            // reactivate textchange propagation on reset and successfull submit
+            $form.on("reset.pat-tinymce pat-ajax-success.pat-tinymce", function() {
+                $tinymce
+                    .off(".pat-tinymce")
+                    .one("textchange.pat-tinymce", propagate)
+                    .one("change.pat-tinymce", propagate);
+            });
 
             // initialize editor
-            var tinymce = tinyMCE.init(cfg);
+            tinyMCE.init(cfg);
 
             // ajaxify form
             var ajaxopts = {
@@ -42755,23 +44600,15 @@ define('patterns/edit-tinymce',[
                 })(id)
             };
 
-            $form.on('submit', function(ev) {
+            $form.on("submit.pat-tinymce", function(ev) {
                 ev.preventDefault();
                 ajax($form, ajaxopts);
             });
 
-            // XXX: we hijack the reset button, but currently only reset
-            // the tiny textarea.
-            $resetbtn.on('click.pat-edit-tinymce', (function(id) {
-                return function(ev) {
-                    ev.preventDefault();
-                    tinyMCE.editors[id].load();
-                };
-            })(id));
-
             return $el;
         },
-        destroy: function($el) {
+
+        destroy: function() {
             // XXX
         }
     };
@@ -42784,39 +44621,39 @@ define('patterns/edit-tinymce',[
 // vim: sw=4 expandtab
 ;
 define('patterns/expandable',[
-    'jquery',
-    '../registry'
+    "jquery",
+    "../registry"
 ], function($, registry) {
     var _ = {
         name: "expandable",
         trigger: "ul.pat-expandable",
-        init: function($el, opts) {
+        init: function($el) {
 
             // XXX: data-pat-expandable with load-content: instead of injection
 
             // make sure inject folders have a ul
-            $el.find('.folder[data-pat-inject]:not(:has(ul))').append('<ul />');
+            $el.find(".folder[data-pat-inject]:not(:has(ul))").append("<ul />");
 
             // find all folders that contain a ul
-            var $folders = $el.find('li.folder:has(ul)');
+            var $folders = $el.find("li.folder:has(ul)");
 
             // inject span.toggle as first child of each folder
-            $folders.prepend('<span class="toggle"></span>');
+            $folders.prepend("<span class='toggle'></span>");
 
             // all folders are implicitly closed
-            $folders.filter(':not(.open,.closed)').addClass('closed');
+            $folders.filter(":not(.open,.closed)").addClass("closed");
 
             // trigger open event for open folders
-            $folders.filter('.open').trigger('patterns-folder-open');
+            $folders.filter(".open").trigger("patterns-folder-open");
 
             // wire spans as control elements
-            var $ctrls = $el.find('span.toggle');
+            var $ctrls = $el.find("span.toggle");
             $ctrls.each(function() {
                 var $ctrl = $(this),
                     $folder = $ctrl.parent();
-                $ctrl.on('click.pat-expandable', function(ev) {
-                    $folder.toggleClass('open closed');
-                    $folder.filter('.open').trigger('patterns-folder-open');
+                $ctrl.on("click.pat-expandable", function() {
+                    $folder.toggleClass("open closed");
+                    $folder.filter(".open").trigger("patterns-folder-open");
                 });
             });
             return $el;
@@ -42836,7 +44673,7 @@ define('patterns/expandable',[
  * Copyright 2012 Simplon B.V.
  */
 define('patterns/focus',[
-    'jquery',
+    "jquery",
     "../registry"
 ], function($, patterns) {
     var focus = {
@@ -42856,22 +44693,22 @@ define('patterns/focus',[
             $relatives=$relatives.add($el.closest("fieldset"));
 
             if (el.id)
-                $label=$('label[for="'+el.id+'"]');
+                $label=$("label[for='"+el.id+"']");
             if (!$label.length) {
                 var $form = $el.closest("form");
                 if (!$form.length)
                     $form=$(document.body);
-                $label=$form.find('label[for="'+el.name+'"]');
+                $label=$form.find("label[for='"+el.name+"']");
             }
             $relatives=$relatives.add($label);
             return $relatives;
         },
 
-        onFocus: function(e) {
+        onFocus: function() {
             focus._findRelatives(this).addClass("focus");
         },
 
-        onBlur: function(e) {
+        onBlur: function() {
             var $relatives = focus._findRelatives(this);
 
             $(document).one("mouseup keyup", function() {
@@ -42891,6 +44728,168 @@ define('patterns/focus',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
+define('patterns/modal',[
+    "jquery",
+    "../core/parser",
+    "../registry",
+    "./inject"
+], function($, Parser, registry, inject) {
+    var parser = new Parser("modal");
+
+    parser.add_argument("class");
+
+    var modal = {
+        name: "modal",
+        // div's are turned into modals
+        // links and forms inject modals
+        trigger: "div.pat-modal, a.pat-modal, form.pat-modal",
+        init: function($el, opts) {
+            return $el.each(function() {
+                var $el = $(this),
+                    cfg = parser.parse($el, opts);
+
+                if ($el.is("div"))
+                    modal._init_div1($el, cfg);
+                else
+                    modal._init_inject1($el, cfg);
+            });
+        },
+
+        _init_inject1: function($el, cfg) {
+            var opts = {
+                target: "#pat-modal",
+                "class": "pat-modal" + (cfg["class"] ? " " + cfg["class"] : "")
+            };
+            // if $el is already inside a modal, do not detach #pat-modal,
+            // because this would unnecessarily close the modal itself
+            if (!$el.closest("#pat-modal")) {
+                $("#pat-modal").detach();
+            }
+            inject.init($el, opts);
+        },
+
+        _init_div1: function($el) {
+            var $header = $("<div class='header' />");
+
+            $("<button type='button' class='close-panel'>Close</button>").appendTo($header);
+
+            // We cannot handle text nodes here
+            $el.children(":last, :not(:first)")
+                .wrapAll("<div class='panel-content' />");
+            $(".panel-content", $el).before($header);
+            $el.children(":first:not(.header)").prependTo($header);
+
+            // event handlers remove modal - first arg to bind is ``this``
+            $(document).on("click.pat-modal", ".close-panel",
+                           modal.destroy.bind($el, $el));
+            // remove on ESC
+            $(document).on("keyup.pat-modal",
+                           modal.destroy.bind($el, $el));
+        },
+
+        destroy: function($el, ev) {
+            if (ev && ev.type === "keyup" && ev.which !== 27)
+                return;
+            $(document).off(".pat-modal");
+            $el.remove();
+        }
+    };
+    registry.register(modal);
+    return modal;
+});
+
+// jshint indent: 4, browser: true, jquery: true, quotmark: double
+// vim: sw=4 expandtab
+;
+define('patterns/form-state',[
+    "jquery",
+    "../core/logger",
+    "../registry",
+    "../utils",
+    "./modal"
+], function($, logger, registry, utils, modal) {
+    var log = logger.getLogger("form-state");
+
+    var _ = {
+        name: "form-state",
+        trigger: "form.pat-form-state",
+        init: function($form) {
+            if ($form.length > 1)
+                return $form.each(function() { _.init($(this)); });
+
+            // XXX: hide reset buttons until we have proper handling for them
+            $form.find("[type=reset]").hide();
+
+            _.setReset.call($form);
+
+            return $form;
+        },
+        setModified: function() {
+            var $form = $(this);
+
+            $form.find("[type=reset]").prop("disabled", false);
+            $form.find("[type=submit]").prop("disabled", false);
+
+            $form.addClass("modified")
+                .off(".pat-form-state")
+                .one("reset.pat-form-state", _.setReset)
+                .one("pat-ajax-error.pat-form-state", _.setError)
+                .one("pat-ajax-success.pat-form-state", _.setSaved);
+            log.debug("modified");
+        },
+        setReset: function() {
+            var $form = $(this);
+
+            $form.find("[type=reset]").prop("disabled", true);
+            $form.find("[type=submit]").prop("disabled", true);
+
+            $form
+                .removeClass("modified")
+                .off(".pat-form-state")
+                .one("change.pat-form-state textchange.pat-form-state",
+                     _.setModified);
+            log.debug("reset");
+        },
+        setError: function(event) {
+            var msg = [event.jqxhr.status, event.jqxhr.statusText].join(" ");
+            modal.init($(
+                "<div class='pat-modal small'>" +
+                    "<h3>Error</h3>" +
+                    "<div class='wizard-box'>" +
+                    "<div class='panel-body'>" +
+                    "<p>A server error has occured.</p>" +
+                    "<p>The error message is: <strong>" + msg + "</strong>.</p>" +
+                    "</div>" +
+                    "<div class='buttons panel-footer'>" +
+                    "<button class='close-panel'>Ok</button>" +
+                    "</div>" +
+                    "</div>" +
+                    "</div>"
+            ).appendTo($("body")));
+        },
+        setSaved: function(event) {
+            if (event.target !== this)
+                return;
+
+            var $form = $(this);
+            _.setReset.call($form);
+
+            var time = new Date(),
+                timestr = time.getHours() + ":" +
+                    time.getMinutes() + ":" +
+                    time.getSeconds();
+            $form.find("time.last-saved").remove();
+            $form.prepend(
+                "<time class='last-saved' datetime='" + timestr + "'>" +
+                    timestr + "</time>"
+            );
+
+            $form.addClass("saved");
+        }
+    };
+    registry.register(_);
+});
+
 /**
  * @preserve
  * FullCalendar v1.5.4
@@ -48115,13 +50114,13 @@ function HorizontalPositionCache(getElement) {
 define("jquery_fullcalendar", ["jquery"], function(){});
 
 define('patterns/fullcalendar',[
-    'jquery',
-    '../logging',
-    '../utils',
+    "jquery",
+    "../core/logger",
+    "../utils",
     "../registry",
-    'jquery_fullcalendar'
-], function($, logging, utils, registry) {
-    var log = logging.getLogger('fullcalendar');
+    "jquery_fullcalendar"
+], function($, logger, utils, registry) {
+    var log = logger.getLogger("pat.fullcalendar");
 
     var fullcalendar = {
         name: "fullcalendar",
@@ -48129,67 +50128,68 @@ define('patterns/fullcalendar',[
 
         init: function($calroot) {
             // XXX: should be within the calendar
-            var $filter = $('.calendar-filters');
+            var $filter = $(".calendar-filters");
             var initMonths = function($root) {
-                if ($root.hasClass('month')) {
+                if ($root.hasClass("month")) {
                     fullcalendar.initMonth($root, $filter);
                 } else {
-                    $root.find('.month').each(function() {
+                    $root.find(".month").each(function() {
                         fullcalendar.initMonth($(this), $filter);
                     });
                 }
             };
 
             // hide all group checkboxes, will be shown if mentioned
-            $filter.find('.check-list .groups label').hide();
+            $filter.find(".check-list .groups label").hide();
 
             // initialize existing months
             initMonths($calroot);
 
             // wait for additional months
-            $calroot.on('patterns-injected.pat-fullcalendar', function(ev) {
+            $calroot.on("patterns-injected.pat-fullcalendar", function(ev) {
                 initMonths($(ev.target));
             });
         },
 
         initMonth: function($month, $filter) {
-            var $events = $('.events', $month);
+            var $events = $(".events", $month);
             if ($events.length === 0) { return; }
-            var ym = $('time', $month).attr('datetime').split('-'),
+            var ym = $("time", $month).attr("datetime").split("-"),
                 year = ym[0],
                 month = Number(ym[1]) - 1,
-                $calendar = $('<div class="calendar">\n</div>')
+                $calendar = $("<div class='calendar'>\n</div>")
                     .insertAfter($events);
             var refetch = function() {
-                $calendar.fullCalendar('refetchEvents');
+                $calendar.fullCalendar("refetchEvents");
                 // XXX: replace with mutator event listener
                 registry.scan($calendar);
             };
             var refetch_deb = utils.debounce(refetch, 400);
             if ($filter && $filter.length > 0) {
-                $('.searchText', $filter).on("keyup", refetch_deb);
-                $('.searchText[type=search]', $filter).on("click", refetch_deb);
-                $('select[name=state]', $filter).on("change", refetch);
-                $('.check-list', $filter).on("change", refetch);
+                $(".searchText", $filter).on("keyup", refetch_deb);
+                $(".searchText[type=search]", $filter).on("click", refetch_deb);
+                $("select[name=state]", $filter).on("change", refetch);
+                $(".check-list", $filter).on("change", refetch);
             }
-            $events.css('display', 'None');
+            $events.css("display", "None");
             $calendar.fullCalendar({
-                dayDblClick: function(date, allDay, jsEvent, view) {
+                disableDragging: "true",
+                dayDblClick: function(/* date, allDay, jsEvent, view */) {
                     // XXX: add event
                 },
                 events: function(start, end, callback) {
                     var events = fullcalendar.parseEvents($events, $filter);
                     callback(events);
                 },
-                eventDrop: function(event, dayDelta, minuteDelta, allDay, revertFunc, jsEvent, ui, view) {
+                eventDrop: function(event, dayDelta, minuteDelta, allDay, revertFunc /*, jsEvent, ui, view */) {
                     // XXX: change event
                     revertFunc();
                 },
-                eventResize: function(event, dayDelta, minuteDelta, revertFunc, jsEvent, ui, view) {
+                eventResize: function(event, dayDelta, minuteDelta, revertFunc /*, jsEvent, ui, view */) {
                     // XXX: change event
                     revertFunc();
                 },
-                header: { left: '', right: '' },
+                header: { left: "", right: "" },
                 month: month,
                 year: year
             });
@@ -48199,11 +50199,11 @@ define('patterns/fullcalendar',[
         parseEvents: function($events, $filter) {
             // show groups that are mentioned
             $filter.find(
-                '.check-list .groups label:hidden'
+                ".check-list .groups label:hidden"
             ).each(function() {
                 var $label = $(this),
-                    id = $label.find('input').attr('name'),
-                    groupsel = '.group-' + id;
+                    id = $label.find("input").attr("name"),
+                    groupsel = ".group-" + id;
                 if ($events.find(groupsel).length > 0) $label.show();
             });
 
@@ -48212,55 +50212,55 @@ define('patterns/fullcalendar',[
 
             // parse filters
             if ($filter && $filter.length > 0) {
-                var searchText = $('.searchText', $filter).val(),
-                    state = $('select[name=state]').val(),
-                    $attendees = $('.attendees', $filter),
-                    noattendees = $attendees.is(':has([name="no-attendees"]:checked)'),
-                    onlyusers = $attendees.is(':has([name="only-users"])'),
+                var searchText = $(".searchText", $filter).val(),
+                    state = $("select[name=state]").val(),
+                    $attendees = $(".attendees", $filter),
+                    noattendees = $attendees.is(":has([name=\"no-attendees\"]:checked)"),
+                    onlyusers = $attendees.is(":has([name=\"only-users\"])"),
                     // XXX: only take visible groups into account
-                    groupsel = $('.groups input:checked', $attendees).map(function() {
-                        var id = $(this).attr('name');
-                        return '.attendees .group-' + id;
-                    }).toArray().join(',');
+                    groupsel = $(".groups input:checked", $attendees).map(function() {
+                        var id = $(this).attr("name");
+                        return ".attendees .group-" + id;
+                    }).toArray().join(",");
             }
-            var events = $events.find('.event').filter(function() {
+            var events = $events.find(".event").filter(function() {
                 var $event = $(this);
                 // workflow state
                 if (state && state !== "all") {
-                    if (!$event.hasClass('.state-' + state)) {
-                        log.debug('filter denied state', $event);
+                    if (!$event.hasClass(".state-" + state)) {
+                        log.debug("filter denied state", $event);
                         return false;
                     }
                 }
 
                 // attendees
-                if ($event.find('.attendees *').length > 0) {
-                    if ($event.find('.attendees .group').length > 0) {
+                if ($event.find(".attendees *").length > 0) {
+                    if ($event.find(".attendees .group").length > 0) {
                         if ($event.find(groupsel).length === 0) {
-                            log.debug('filter denied groups', $event);
+                            log.debug("filter denied groups", $event);
                             return false;
                         }
                     } else if (!onlyusers) {
-                        log.debug('filter denied onlyusers', $event);
+                        log.debug("filter denied onlyusers", $event);
                         return false;
                     }
                 } else if (!noattendees) {
-                    log.debug('filter denied noattendees', $event);
+                    log.debug("filter denied noattendees", $event);
                     return false;
                 }
 
                 // full text search
-                if (searchText && !$event.is(':Contains(' + searchText + ')')) {
-                    log.debug('filter denied fulltext', $event);
+                if (searchText && !$event.is(":Contains(" + searchText + ")")) {
+                    log.debug("filter denied fulltext", $event);
                     return false;
                 }
 
                 return true;
             }).map(function(idx, event) {
-                var classNames = $(event).attr('class').split(/\s+/).filter(function(cls) {
-                    return (cls !== 'event');
-                }).concat($('a', event).attr('class').split(/\s+/));
-                var allattrs = $('a', event)[0].attributes,
+                var classNames = $(event).attr("class").split(/\s+/).filter(function(cls) {
+                    return (cls !== "event");
+                }).concat($("a", event).attr("class").split(/\s+/));
+                var allattrs = $("a", event)[0].attributes,
                     attrs = {};
                 for (var attr, i=0; i<allattrs.length; i++){
                     attr = allattrs.item(i);
@@ -48268,21 +50268,21 @@ define('patterns/fullcalendar',[
                         attrs[attr.nodeName] = attr.nodeValue;
                     }
                 }
-                var location = ($('.location', event).html() || '').trim();
+                var location = ($(".location", event).html() || "").trim();
                 var ev = {
-                    title: $('.title', event).html().trim() +
-                        (location ? (' (' + location + ')') : ''),
-                    start: $('.start', event).attr('datetime'),
-                    end: $('.end', event).attr('datetime'),
-                    allDay: $(event).hasClass('all-day'),
-                    url: $('a', event).attr('href'),
+                    title: $(".title", event).html().trim() +
+                        (location ? (" (" + location + ")") : ""),
+                    start: $(".start", event).attr("datetime"),
+                    end: $(".end", event).attr("datetime"),
+                    allDay: $(event).hasClass("all-day"),
+                    url: $("a", event).attr("href"),
                     className: classNames,
                     attrs: attrs,
-                    editable: $(event).hasClass('editable')
+                    editable: $(event).hasClass("editable")
                 };
-                if (!ev.title) log.error('No event title for:', event);
-                if (!ev.start) log.error('No event start for:', event);
-                if (!ev.url) log.error('No event url for:', event);
+                if (!ev.title) log.error("No event title for:", event);
+                if (!ev.start) log.error("No event start for:", event);
+                if (!ev.url) log.error("No event url for:", event);
                 return ev;
             }).toArray();
             return events;
@@ -48294,8 +50294,3371 @@ define('patterns/fullcalendar',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
+/**
+ * jquery.Jcrop.js v0.9.10
+ * jQuery Image Cropping Plugin - released under MIT License 
+ * Author: Kelly Hallman <khallman@gmail.com>
+ * http://github.com/tapmodo/Jcrop
+ * Copyright (c) 2008-2012 Tapmodo Interactive LLC {{{
+ *
+ * Permission is hereby granted, free of charge, to any person
+ * obtaining a copy of this software and associated documentation
+ * files (the "Software"), to deal in the Software without
+ * restriction, including without limitation the rights to use,
+ * copy, modify, merge, publish, distribute, sublicense, and/or sell
+ * copies of the Software, and to permit persons to whom the
+ * Software is furnished to do so, subject to the following
+ * conditions:
+ *
+ * The above copyright notice and this permission notice shall be
+ * included in all copies or substantial portions of the Software.
+ *
+ * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND,
+ * EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES
+ * OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND
+ * NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT
+ * HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY,
+ * WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
+ * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
+ * OTHER DEALINGS IN THE SOFTWARE.
+ *
+ * }}}
+ */
+
+(function ($) {
+
+  $.Jcrop = function (obj, opt) {
+    var options = $.extend({}, $.Jcrop.defaults),
+        docOffset, lastcurs, ie6mode = false;
+
+    // Internal Methods {{{
+    function px(n) {
+      return n + 'px';
+    }
+    function cssClass(cl) {
+      return options.baseClass + '-' + cl;
+    }
+    function supportsColorFade() {
+      return $.fx.step.hasOwnProperty('backgroundColor');
+    }
+    function getPos(obj) //{{{
+    {
+      var pos = $(obj).offset();
+      return [pos.left, pos.top];
+    }
+    //}}}
+    function mouseAbs(e) //{{{
+    {
+      return [(e.pageX - docOffset[0]), (e.pageY - docOffset[1])];
+    }
+    //}}}
+    function setOptions(opt) //{{{
+    {
+      if (typeof(opt) !== 'object') opt = {};
+      options = $.extend(options, opt);
+
+      $.each(['onChange','onSelect','onRelease','onDblClick'],function(i,e) {
+        if (typeof(options[e]) !== 'function') options[e] = function () {};
+      });
+    }
+    //}}}
+    function startDragMode(mode, pos) //{{{
+    {
+      docOffset = getPos($img);
+      Tracker.setCursor(mode === 'move' ? mode : mode + '-resize');
+
+      if (mode === 'move') {
+        return Tracker.activateHandlers(createMover(pos), doneSelect);
+      }
+
+      var fc = Coords.getFixed();
+      var opp = oppLockCorner(mode);
+      var opc = Coords.getCorner(oppLockCorner(opp));
+
+      Coords.setPressed(Coords.getCorner(opp));
+      Coords.setCurrent(opc);
+
+      Tracker.activateHandlers(dragmodeHandler(mode, fc), doneSelect);
+    }
+    //}}}
+    function dragmodeHandler(mode, f) //{{{
+    {
+      return function (pos) {
+        if (!options.aspectRatio) {
+          switch (mode) {
+          case 'e':
+            pos[1] = f.y2;
+            break;
+          case 'w':
+            pos[1] = f.y2;
+            break;
+          case 'n':
+            pos[0] = f.x2;
+            break;
+          case 's':
+            pos[0] = f.x2;
+            break;
+          }
+        } else {
+          switch (mode) {
+          case 'e':
+            pos[1] = f.y + 1;
+            break;
+          case 'w':
+            pos[1] = f.y + 1;
+            break;
+          case 'n':
+            pos[0] = f.x + 1;
+            break;
+          case 's':
+            pos[0] = f.x + 1;
+            break;
+          }
+        }
+        Coords.setCurrent(pos);
+        Selection.update();
+      };
+    }
+    //}}}
+    function createMover(pos) //{{{
+    {
+      var lloc = pos;
+      KeyManager.watchKeys();
+
+      return function (pos) {
+        Coords.moveOffset([pos[0] - lloc[0], pos[1] - lloc[1]]);
+        lloc = pos;
+
+        Selection.update();
+      };
+    }
+    //}}}
+    function oppLockCorner(ord) //{{{
+    {
+      switch (ord) {
+      case 'n':
+        return 'sw';
+      case 's':
+        return 'nw';
+      case 'e':
+        return 'nw';
+      case 'w':
+        return 'ne';
+      case 'ne':
+        return 'sw';
+      case 'nw':
+        return 'se';
+      case 'se':
+        return 'nw';
+      case 'sw':
+        return 'ne';
+      }
+    }
+    //}}}
+    function createDragger(ord) //{{{
+    {
+      return function (e) {
+        if (options.disabled) {
+          return false;
+        }
+        if ((ord === 'move') && !options.allowMove) {
+          return false;
+        }
+        
+        // Fix position of crop area when dragged the very first time.
+        // Necessary when crop image is in a hidden element when page is loaded.
+        docOffset = getPos($img);
+
+        btndown = true;
+        startDragMode(ord, mouseAbs(e));
+        e.stopPropagation();
+        e.preventDefault();
+        return false;
+      };
+    }
+    //}}}
+    function presize($obj, w, h) //{{{
+    {
+      var nw = $obj.width(),
+          nh = $obj.height();
+      if ((nw > w) && w > 0) {
+        nw = w;
+        nh = (w / $obj.width()) * $obj.height();
+      }
+      if ((nh > h) && h > 0) {
+        nh = h;
+        nw = (h / $obj.height()) * $obj.width();
+      }
+      xscale = $obj.width() / nw;
+      yscale = $obj.height() / nh;
+      $obj.width(nw).height(nh);
+    }
+    //}}}
+    function unscale(c) //{{{
+    {
+      return {
+        x: c.x * xscale,
+        y: c.y * yscale,
+        x2: c.x2 * xscale,
+        y2: c.y2 * yscale,
+        w: c.w * xscale,
+        h: c.h * yscale
+      };
+    }
+    //}}}
+    function doneSelect(pos) //{{{
+    {
+      var c = Coords.getFixed();
+      if ((c.w > options.minSelect[0]) && (c.h > options.minSelect[1])) {
+        Selection.enableHandles();
+        Selection.done();
+      } else {
+        Selection.release();
+      }
+      Tracker.setCursor(options.allowSelect ? 'crosshair' : 'default');
+    }
+    //}}}
+    function newSelection(e) //{{{
+    {
+      if (options.disabled) {
+        return false;
+      }
+      if (!options.allowSelect) {
+        return false;
+      }
+      btndown = true;
+      docOffset = getPos($img);
+      Selection.disableHandles();
+      Tracker.setCursor('crosshair');
+      var pos = mouseAbs(e);
+      Coords.setPressed(pos);
+      Selection.update();
+      Tracker.activateHandlers(selectDrag, doneSelect);
+      KeyManager.watchKeys();
+
+      e.stopPropagation();
+      e.preventDefault();
+      return false;
+    }
+    //}}}
+    function selectDrag(pos) //{{{
+    {
+      Coords.setCurrent(pos);
+      Selection.update();
+    }
+    //}}}
+    function newTracker() //{{{
+    {
+      var trk = $('<div></div>').addClass(cssClass('tracker'));
+      if ($.browser.msie) {
+        trk.css({
+          opacity: 0,
+          backgroundColor: 'white'
+        });
+      }
+      return trk;
+    }
+    //}}}
+
+    // }}}
+    // Initialization {{{
+    // Sanitize some options {{{
+    if ($.browser.msie && ($.browser.version.split('.')[0] === '6')) {
+      ie6mode = true;
+    }
+    if (typeof(obj) !== 'object') {
+      obj = $(obj)[0];
+    }
+    if (typeof(opt) !== 'object') {
+      opt = {};
+    }
+    // }}}
+    setOptions(opt);
+    // Initialize some jQuery objects {{{
+    // The values are SET on the image(s) for the interface
+    // If the original image has any of these set, they will be reset
+    // However, if you destroy() the Jcrop instance the original image's
+    // character in the DOM will be as you left it.
+    var img_css = {
+      border: 'none',
+      visibility: 'visible',
+      margin: 0,
+      padding: 0,
+      position: 'absolute',
+      top: 0,
+      left: 0
+    };
+
+    var $origimg = $(obj),
+      img_mode = true;
+
+    if (obj.tagName == 'IMG') {
+      // Fix size of crop image.
+      // Necessary when crop image is within a hidden element when page is loaded.
+      if ($origimg[0].width != 0 && $origimg[0].height != 0) {
+        // Obtain dimensions from contained img element.
+        $origimg.width($origimg[0].width);
+        $origimg.height($origimg[0].height);
+      } else {
+        // Obtain dimensions from temporary image in case the original is not loaded yet (e.g. IE 7.0). 
+        var tempImage = new Image();
+        tempImage.src = $origimg[0].src;
+        $origimg.width(tempImage.width);
+        $origimg.height(tempImage.height);
+      } 
+
+      var $img = $origimg.clone().removeAttr('id').css(img_css).show();
+
+      $img.width($origimg.width());
+      $img.height($origimg.height());
+      $origimg.after($img).hide();
+
+    } else {
+      $img = $origimg.css(img_css).show();
+      img_mode = false;
+      if (options.shade === null) { options.shade = true; }
+    }
+
+    presize($img, options.boxWidth, options.boxHeight);
+
+    var boundx = $img.width(),
+        boundy = $img.height(),
+        
+        
+        $div = $('<div />').width(boundx).height(boundy).addClass(cssClass('holder')).css({
+        position: 'relative',
+        backgroundColor: options.bgColor
+      }).insertAfter($origimg).append($img);
+
+    if (options.addClass) {
+      $div.addClass(options.addClass);
+    }
+
+    var $img2 = $('<div />'),
+
+        $img_holder = $('<div />') 
+        .width('100%').height('100%').css({
+          zIndex: 310,
+          position: 'absolute',
+          overflow: 'hidden'
+        }),
+
+        $hdl_holder = $('<div />') 
+        .width('100%').height('100%').css('zIndex', 320), 
+
+        $sel = $('<div />') 
+        .css({
+          position: 'absolute',
+          zIndex: 600
+        }).dblclick(function(){
+          var c = Coords.getFixed();
+          options.onDblClick.call(api,c);
+        }).insertBefore($img).append($img_holder, $hdl_holder); 
+
+    if (img_mode) {
+
+      $img2 = $('<img />')
+          .attr('src', $img.attr('src')).css(img_css).width(boundx).height(boundy),
+
+      $img_holder.append($img2);
+
+    }
+
+    if (ie6mode) {
+      $sel.css({
+        overflowY: 'hidden'
+      });
+    }
+
+    var bound = options.boundary;
+    var $trk = newTracker().width(boundx + (bound * 2)).height(boundy + (bound * 2)).css({
+      position: 'absolute',
+      top: px(-bound),
+      left: px(-bound),
+      zIndex: 290
+    }).mousedown(newSelection);
+
+    /* }}} */
+    // Set more variables {{{
+    var bgcolor = options.bgColor,
+        bgopacity = options.bgOpacity,
+        xlimit, ylimit, xmin, ymin, xscale, yscale, enabled = true,
+        btndown, animating, shift_down;
+
+    docOffset = getPos($img);
+    // }}}
+    // }}}
+    // Internal Modules {{{
+    // Touch Module {{{ 
+    var Touch = (function () {
+      // Touch support detection function adapted (under MIT License)
+      // from code by Jeffrey Sambells - http://github.com/iamamused/
+      function hasTouchSupport() {
+        var support = {},
+            events = ['touchstart', 'touchmove', 'touchend'],
+            el = document.createElement('div'), i;
+
+        try {
+          for(i=0; i<events.length; i++) {
+            var eventName = events[i];
+            eventName = 'on' + eventName;
+            var isSupported = (eventName in el);
+            if (!isSupported) {
+              el.setAttribute(eventName, 'return;');
+              isSupported = typeof el[eventName] == 'function';
+            }
+            support[events[i]] = isSupported;
+          }
+          return support.touchstart && support.touchend && support.touchmove;
+        }
+        catch(err) {
+          return false;
+        }
+      }
+
+      function detectSupport() {
+        if ((options.touchSupport === true) || (options.touchSupport === false)) return options.touchSupport;
+          else return hasTouchSupport();
+      }
+      return {
+        createDragger: function (ord) {
+          return function (e) {
+            e.pageX = e.originalEvent.changedTouches[0].pageX;
+            e.pageY = e.originalEvent.changedTouches[0].pageY;
+            if (options.disabled) {
+              return false;
+            }
+            if ((ord === 'move') && !options.allowMove) {
+              return false;
+            }
+            btndown = true;
+            startDragMode(ord, mouseAbs(e));
+            e.stopPropagation();
+            e.preventDefault();
+            return false;
+          };
+        },
+        newSelection: function (e) {
+          e.pageX = e.originalEvent.changedTouches[0].pageX;
+          e.pageY = e.originalEvent.changedTouches[0].pageY;
+          return newSelection(e);
+        },
+        isSupported: hasTouchSupport,
+        support: detectSupport()
+      };
+    }());
+    // }}}
+    // Coords Module {{{
+    var Coords = (function () {
+      var x1 = 0,
+          y1 = 0,
+          x2 = 0,
+          y2 = 0,
+          ox, oy;
+
+      function setPressed(pos) //{{{
+      {
+        pos = rebound(pos);
+        x2 = x1 = pos[0];
+        y2 = y1 = pos[1];
+      }
+      //}}}
+      function setCurrent(pos) //{{{
+      {
+        pos = rebound(pos);
+        ox = pos[0] - x2;
+        oy = pos[1] - y2;
+        x2 = pos[0];
+        y2 = pos[1];
+      }
+      //}}}
+      function getOffset() //{{{
+      {
+        return [ox, oy];
+      }
+      //}}}
+      function moveOffset(offset) //{{{
+      {
+        var ox = offset[0],
+            oy = offset[1];
+
+        if (0 > x1 + ox) {
+          ox -= ox + x1;
+        }
+        if (0 > y1 + oy) {
+          oy -= oy + y1;
+        }
+
+        if (boundy < y2 + oy) {
+          oy += boundy - (y2 + oy);
+        }
+        if (boundx < x2 + ox) {
+          ox += boundx - (x2 + ox);
+        }
+
+        x1 += ox;
+        x2 += ox;
+        y1 += oy;
+        y2 += oy;
+      }
+      //}}}
+      function getCorner(ord) //{{{
+      {
+        var c = getFixed();
+        switch (ord) {
+        case 'ne':
+          return [c.x2, c.y];
+        case 'nw':
+          return [c.x, c.y];
+        case 'se':
+          return [c.x2, c.y2];
+        case 'sw':
+          return [c.x, c.y2];
+        }
+      }
+      //}}}
+      function getFixed() //{{{
+      {
+        if (!options.aspectRatio) {
+          return getRect();
+        }
+        // This function could use some optimization I think...
+        var aspect = options.aspectRatio,
+            min_x = options.minSize[0] / xscale,
+            
+            
+            //min_y = options.minSize[1]/yscale,
+            max_x = options.maxSize[0] / xscale,
+            max_y = options.maxSize[1] / yscale,
+            rw = x2 - x1,
+            rh = y2 - y1,
+            rwa = Math.abs(rw),
+            rha = Math.abs(rh),
+            real_ratio = rwa / rha,
+            xx, yy, w, h;
+
+        if (max_x === 0) {
+          max_x = boundx * 10;
+        }
+        if (max_y === 0) {
+          max_y = boundy * 10;
+        }
+        if (real_ratio < aspect) {
+          yy = y2;
+          w = rha * aspect;
+          xx = rw < 0 ? x1 - w : w + x1;
+
+          if (xx < 0) {
+            xx = 0;
+            h = Math.abs((xx - x1) / aspect);
+            yy = rh < 0 ? y1 - h : h + y1;
+          } else if (xx > boundx) {
+            xx = boundx;
+            h = Math.abs((xx - x1) / aspect);
+            yy = rh < 0 ? y1 - h : h + y1;
+          }
+        } else {
+          xx = x2;
+          h = rwa / aspect;
+          yy = rh < 0 ? y1 - h : y1 + h;
+          if (yy < 0) {
+            yy = 0;
+            w = Math.abs((yy - y1) * aspect);
+            xx = rw < 0 ? x1 - w : w + x1;
+          } else if (yy > boundy) {
+            yy = boundy;
+            w = Math.abs(yy - y1) * aspect;
+            xx = rw < 0 ? x1 - w : w + x1;
+          }
+        }
+
+        // Magic %-)
+        if (xx > x1) { // right side
+          if (xx - x1 < min_x) {
+            xx = x1 + min_x;
+          } else if (xx - x1 > max_x) {
+            xx = x1 + max_x;
+          }
+          if (yy > y1) {
+            yy = y1 + (xx - x1) / aspect;
+          } else {
+            yy = y1 - (xx - x1) / aspect;
+          }
+        } else if (xx < x1) { // left side
+          if (x1 - xx < min_x) {
+            xx = x1 - min_x;
+          } else if (x1 - xx > max_x) {
+            xx = x1 - max_x;
+          }
+          if (yy > y1) {
+            yy = y1 + (x1 - xx) / aspect;
+          } else {
+            yy = y1 - (x1 - xx) / aspect;
+          }
+        }
+
+        if (xx < 0) {
+          x1 -= xx;
+          xx = 0;
+        } else if (xx > boundx) {
+          x1 -= xx - boundx;
+          xx = boundx;
+        }
+
+        if (yy < 0) {
+          y1 -= yy;
+          yy = 0;
+        } else if (yy > boundy) {
+          y1 -= yy - boundy;
+          yy = boundy;
+        }
+
+        return makeObj(flipCoords(x1, y1, xx, yy));
+      }
+      //}}}
+      function rebound(p) //{{{
+      {
+        if (p[0] < 0) {
+          p[0] = 0;
+        }
+        if (p[1] < 0) {
+          p[1] = 0;
+        }
+
+        if (p[0] > boundx) {
+          p[0] = boundx;
+        }
+        if (p[1] > boundy) {
+          p[1] = boundy;
+        }
+
+        return [p[0], p[1]];
+      }
+      //}}}
+      function flipCoords(x1, y1, x2, y2) //{{{
+      {
+        var xa = x1,
+            xb = x2,
+            ya = y1,
+            yb = y2;
+        if (x2 < x1) {
+          xa = x2;
+          xb = x1;
+        }
+        if (y2 < y1) {
+          ya = y2;
+          yb = y1;
+        }
+        return [xa, ya, xb, yb];
+      }
+      //}}}
+      function getRect() //{{{
+      {
+        var xsize = x2 - x1,
+            ysize = y2 - y1,
+            delta;
+
+        if (xlimit && (Math.abs(xsize) > xlimit)) {
+          x2 = (xsize > 0) ? (x1 + xlimit) : (x1 - xlimit);
+        }
+        if (ylimit && (Math.abs(ysize) > ylimit)) {
+          y2 = (ysize > 0) ? (y1 + ylimit) : (y1 - ylimit);
+        }
+
+        if (ymin / yscale && (Math.abs(ysize) < ymin / yscale)) {
+          y2 = (ysize > 0) ? (y1 + ymin / yscale) : (y1 - ymin / yscale);
+        }
+        if (xmin / xscale && (Math.abs(xsize) < xmin / xscale)) {
+          x2 = (xsize > 0) ? (x1 + xmin / xscale) : (x1 - xmin / xscale);
+        }
+
+        if (x1 < 0) {
+          x2 -= x1;
+          x1 -= x1;
+        }
+        if (y1 < 0) {
+          y2 -= y1;
+          y1 -= y1;
+        }
+        if (x2 < 0) {
+          x1 -= x2;
+          x2 -= x2;
+        }
+        if (y2 < 0) {
+          y1 -= y2;
+          y2 -= y2;
+        }
+        if (x2 > boundx) {
+          delta = x2 - boundx;
+          x1 -= delta;
+          x2 -= delta;
+        }
+        if (y2 > boundy) {
+          delta = y2 - boundy;
+          y1 -= delta;
+          y2 -= delta;
+        }
+        if (x1 > boundx) {
+          delta = x1 - boundy;
+          y2 -= delta;
+          y1 -= delta;
+        }
+        if (y1 > boundy) {
+          delta = y1 - boundy;
+          y2 -= delta;
+          y1 -= delta;
+        }
+
+        return makeObj(flipCoords(x1, y1, x2, y2));
+      }
+      //}}}
+      function makeObj(a) //{{{
+      {
+        return {
+          x: a[0],
+          y: a[1],
+          x2: a[2],
+          y2: a[3],
+          w: a[2] - a[0],
+          h: a[3] - a[1]
+        };
+      }
+      //}}}
+
+      return {
+        flipCoords: flipCoords,
+        setPressed: setPressed,
+        setCurrent: setCurrent,
+        getOffset: getOffset,
+        moveOffset: moveOffset,
+        getCorner: getCorner,
+        getFixed: getFixed
+      };
+    }());
+
+    //}}}
+    // Shade Module {{{
+    var Shade = (function() {
+      var enabled = false,
+          holder = $('<div />').css({
+            position: 'absolute',
+            zIndex: 240,
+            opacity: 0
+          }),
+          shades = {
+            top: createShade(),
+            left: createShade().height(boundy),
+            right: createShade().height(boundy),
+            bottom: createShade()
+          };
+
+      function resizeShades(w,h) {
+        shades.left.css({ height: px(h) });
+        shades.right.css({ height: px(h) });
+      }
+      function updateAuto()
+      {
+        return updateShade(Coords.getFixed());
+      }
+      function updateShade(c)
+      {
+        shades.top.css({
+          left: px(c.x),
+          width: px(c.w),
+          height: px(c.y)
+        });
+        shades.bottom.css({
+          top: px(c.y2),
+          left: px(c.x),
+          width: px(c.w),
+          height: px(boundy-c.y2)
+        });
+        shades.right.css({
+          left: px(c.x2),
+          width: px(boundx-c.x2)
+        });
+        shades.left.css({
+          width: px(c.x)
+        });
+      }
+      function createShade() {
+        return $('<div />').css({
+          position: 'absolute',
+          backgroundColor: options.shadeColor||options.bgColor
+        }).appendTo(holder);
+      }
+      function enableShade() {
+        if (!enabled) {
+          enabled = true;
+          holder.insertBefore($img);
+          updateAuto();
+          Selection.setBgOpacity(1,0,1);
+          $img2.hide();
+
+          setBgColor(options.shadeColor||options.bgColor,1);
+          if (Selection.isAwake())
+          {
+            setOpacity(options.bgOpacity,1);
+          }
+            else setOpacity(1,1);
+        }
+      }
+      function setBgColor(color,now) {
+        colorChangeMacro(getShades(),color,now);
+      }
+      function disableShade() {
+        if (enabled) {
+          holder.remove();
+          $img2.show();
+          enabled = false;
+          if (Selection.isAwake()) {
+            Selection.setBgOpacity(options.bgOpacity,1,1);
+          } else {
+            Selection.setBgOpacity(1,1,1);
+            Selection.disableHandles();
+          }
+          colorChangeMacro($div,0,1);
+        }
+      }
+      function setOpacity(opacity,now) {
+        if (enabled) {
+          if (options.bgFade && !now) {
+            holder.animate({
+              opacity: 1-opacity
+            },{
+              queue: false,
+              duration: options.fadeTime
+            });
+          }
+          else holder.css({opacity:1-opacity});
+        }
+      }
+      function refreshAll() {
+        options.shade ? enableShade() : disableShade();
+        if (Selection.isAwake()) setOpacity(options.bgOpacity);
+      }
+      function getShades() {
+        return holder.children();
+      }
+
+      return {
+        update: updateAuto,
+        updateRaw: updateShade,
+        getShades: getShades,
+        setBgColor: setBgColor,
+        enable: enableShade,
+        disable: disableShade,
+        resize: resizeShades,
+        refresh: refreshAll,
+        opacity: setOpacity
+      };
+    }());
+    // }}}
+    // Selection Module {{{
+    var Selection = (function () {
+      var awake,
+          hdep = 370,
+          borders = {},
+          handle = {},
+          dragbar = {},
+          seehandles = false;
+
+      // Private Methods
+      function insertBorder(type) //{{{
+      {
+        var jq = $('<div />').css({
+          position: 'absolute',
+          opacity: options.borderOpacity
+        }).addClass(cssClass(type));
+        $img_holder.append(jq);
+        return jq;
+      }
+      //}}}
+      function dragDiv(ord, zi) //{{{
+      {
+        var jq = $('<div />').mousedown(createDragger(ord)).css({
+          cursor: ord + '-resize',
+          position: 'absolute',
+          zIndex: zi
+        }).addClass('ord-'+ord);
+
+        if (Touch.support) {
+          jq.bind('touchstart.jcrop', Touch.createDragger(ord));
+        }
+
+        $hdl_holder.append(jq);
+        return jq;
+      }
+      //}}}
+      function insertHandle(ord) //{{{
+      {
+        var hs = options.handleSize;
+        return dragDiv(ord, hdep++).css({
+          opacity: options.handleOpacity
+        }).width(hs).height(hs).addClass(cssClass('handle'));
+      }
+      //}}}
+      function insertDragbar(ord) //{{{
+      {
+        return dragDiv(ord, hdep++).addClass('jcrop-dragbar');
+      }
+      //}}}
+      function createDragbars(li) //{{{
+      {
+        var i;
+        for (i = 0; i < li.length; i++) {
+          dragbar[li[i]] = insertDragbar(li[i]);
+        }
+      }
+      //}}}
+      function createBorders(li) //{{{
+      {
+        var cl,i;
+        for (i = 0; i < li.length; i++) {
+          switch(li[i]){
+            case'n': cl='hline'; break;
+            case's': cl='hline bottom'; break;
+            case'e': cl='vline right'; break;
+            case'w': cl='vline'; break;
+          }
+          borders[li[i]] = insertBorder(cl);
+        }
+      }
+      //}}}
+      function createHandles(li) //{{{
+      {
+        var i;
+        for (i = 0; i < li.length; i++) {
+          handle[li[i]] = insertHandle(li[i]);
+        }
+      }
+      //}}}
+      function moveto(x, y) //{{{
+      {
+        if (!options.shade) {
+          $img2.css({
+            top: px(-y),
+            left: px(-x)
+          });
+        }
+        $sel.css({
+          top: px(y),
+          left: px(x)
+        });
+      }
+      //}}}
+      function resize(w, h) //{{{
+      {
+        $sel.width(w).height(h);
+      }
+      //}}}
+      function refresh() //{{{
+      {
+        var c = Coords.getFixed();
+
+        Coords.setPressed([c.x, c.y]);
+        Coords.setCurrent([c.x2, c.y2]);
+
+        updateVisible();
+      }
+      //}}}
+
+      // Internal Methods
+      function updateVisible(select) //{{{
+      {
+        if (awake) {
+          return update(select);
+        }
+      }
+      //}}}
+      function update(select) //{{{
+      {
+        var c = Coords.getFixed();
+
+        resize(c.w, c.h);
+        moveto(c.x, c.y);
+        if (options.shade) Shade.updateRaw(c);
+
+        awake || show();
+
+        if (select) {
+          options.onSelect.call(api, unscale(c));
+        } else {
+          options.onChange.call(api, unscale(c));
+        }
+      }
+      //}}}
+      function setBgOpacity(opacity,force,now) //{{{
+      {
+        if (!awake && !force) return;
+        if (options.bgFade && !now) {
+          $img.animate({
+            opacity: opacity
+          },{
+            queue: false,
+            duration: options.fadeTime
+          });
+        } else {
+          $img.css('opacity', opacity);
+        }
+      }
+      //}}}
+      function show() //{{{
+      {
+        $sel.show();
+
+        if (options.shade) Shade.opacity(bgopacity);
+          else setBgOpacity(bgopacity,true);
+
+        awake = true;
+      }
+      //}}}
+      function release() //{{{
+      {
+        disableHandles();
+        $sel.hide();
+
+        if (options.shade) Shade.opacity(1);
+          else setBgOpacity(1);
+
+        awake = false;
+        options.onRelease.call(api);
+      }
+      //}}}
+      function showHandles() //{{{
+      {
+        if (seehandles) {
+          $hdl_holder.show();
+        }
+      }
+      //}}}
+      function enableHandles() //{{{
+      {
+        seehandles = true;
+        if (options.allowResize) {
+          $hdl_holder.show();
+          return true;
+        }
+      }
+      //}}}
+      function disableHandles() //{{{
+      {
+        seehandles = false;
+        $hdl_holder.hide();
+      } 
+      //}}}
+      function animMode(v) //{{{
+      {
+        if (animating === v) {
+          disableHandles();
+        } else {
+          enableHandles();
+        }
+      } 
+      //}}}
+      function done() //{{{
+      {
+        animMode(false);
+        refresh();
+      } 
+      //}}}
+      // Insert draggable elements {{{
+      // Insert border divs for outline
+
+      if (options.dragEdges && $.isArray(options.createDragbars))
+        createDragbars(options.createDragbars);
+
+      if ($.isArray(options.createHandles))
+        createHandles(options.createHandles);
+
+      if (options.drawBorders && $.isArray(options.createBorders))
+        createBorders(options.createBorders);
+
+      //}}}
+
+      // This is a hack for iOS5 to support drag/move touch functionality
+      $(document).bind('touchstart.jcrop-ios',function(e) {
+        if ($(e.currentTarget).hasClass('jcrop-tracker')) e.stopPropagation();
+      });
+
+      var $track = newTracker().mousedown(createDragger('move')).css({
+        cursor: 'move',
+        position: 'absolute',
+        zIndex: 360
+      });
+
+      if (Touch.support) {
+        $track.bind('touchstart.jcrop', Touch.createDragger('move'));
+      }
+
+      $img_holder.append($track);
+      disableHandles();
+
+      return {
+        updateVisible: updateVisible,
+        update: update,
+        release: release,
+        refresh: refresh,
+        isAwake: function () {
+          return awake;
+        },
+        setCursor: function (cursor) {
+          $track.css('cursor', cursor);
+        },
+        enableHandles: enableHandles,
+        enableOnly: function () {
+          seehandles = true;
+        },
+        showHandles: showHandles,
+        disableHandles: disableHandles,
+        animMode: animMode,
+        setBgOpacity: setBgOpacity,
+        done: done
+      };
+    }());
+    
+    //}}}
+    // Tracker Module {{{
+    var Tracker = (function () {
+      var onMove = function () {},
+          onDone = function () {},
+          trackDoc = options.trackDocument;
+
+      function toFront() //{{{
+      {
+        $trk.css({
+          zIndex: 450
+        });
+        if (Touch.support) {
+          $(document)
+            .bind('touchmove.jcrop', trackTouchMove)
+            .bind('touchend.jcrop', trackTouchEnd);
+        }
+        if (trackDoc) {
+          $(document)
+            .bind('mousemove.jcrop',trackMove)
+            .bind('mouseup.jcrop',trackUp);
+        }
+      } 
+      //}}}
+      function toBack() //{{{
+      {
+        $trk.css({
+          zIndex: 290
+        });
+        $(document).unbind('.jcrop');
+      } 
+      //}}}
+      function trackMove(e) //{{{
+      {
+        onMove(mouseAbs(e));
+        return false;
+      } 
+      //}}}
+      function trackUp(e) //{{{
+      {
+        e.preventDefault();
+        e.stopPropagation();
+
+        if (btndown) {
+          btndown = false;
+
+          onDone(mouseAbs(e));
+
+          if (Selection.isAwake()) {
+            options.onSelect.call(api, unscale(Coords.getFixed()));
+          }
+
+          toBack();
+          onMove = function () {};
+          onDone = function () {};
+        }
+
+        return false;
+      }
+      //}}}
+      function activateHandlers(move, done) //{{{
+      {
+        btndown = true;
+        onMove = move;
+        onDone = done;
+        toFront();
+        return false;
+      }
+      //}}}
+      function trackTouchMove(e) //{{{
+      {
+        e.pageX = e.originalEvent.changedTouches[0].pageX;
+        e.pageY = e.originalEvent.changedTouches[0].pageY;
+        return trackMove(e);
+      }
+      //}}}
+      function trackTouchEnd(e) //{{{
+      {
+        e.pageX = e.originalEvent.changedTouches[0].pageX;
+        e.pageY = e.originalEvent.changedTouches[0].pageY;
+        return trackUp(e);
+      }
+      //}}}
+      function setCursor(t) //{{{
+      {
+        $trk.css('cursor', t);
+      }
+      //}}}
+
+      if (!trackDoc) {
+        $trk.mousemove(trackMove).mouseup(trackUp).mouseout(trackUp);
+      }
+
+      $img.before($trk);
+      return {
+        activateHandlers: activateHandlers,
+        setCursor: setCursor
+      };
+    }());
+    //}}}
+    // KeyManager Module {{{
+    var KeyManager = (function () {
+      var $keymgr = $('<input type="radio" />').css({
+        position: 'fixed',
+        left: '-120px',
+        width: '12px'
+      }),
+          $keywrap = $('<div />').css({
+          position: 'absolute',
+          overflow: 'hidden'
+        }).append($keymgr);
+
+      function watchKeys() //{{{
+      {
+        if (options.keySupport) {
+          $keymgr.show();
+          $keymgr.focus();
+        }
+      }
+      //}}}
+      function onBlur(e) //{{{
+      {
+        $keymgr.hide();
+      }
+      //}}}
+      function doNudge(e, x, y) //{{{
+      {
+        if (options.allowMove) {
+          Coords.moveOffset([x, y]);
+          Selection.updateVisible(true);
+        }
+        e.preventDefault();
+        e.stopPropagation();
+      }
+      //}}}
+      function parseKey(e) //{{{
+      {
+        if (e.ctrlKey || e.metaKey) {
+          return true;
+        }
+        shift_down = e.shiftKey ? true : false;
+        var nudge = shift_down ? 10 : 1;
+
+        switch (e.keyCode) {
+        case 37:
+          doNudge(e, -nudge, 0);
+          break;
+        case 39:
+          doNudge(e, nudge, 0);
+          break;
+        case 38:
+          doNudge(e, 0, -nudge);
+          break;
+        case 40:
+          doNudge(e, 0, nudge);
+          break;
+        case 27:
+          if (options.allowSelect) Selection.release();
+          break;
+        case 9:
+          return true;
+        }
+
+        return false;
+      }
+      //}}}
+
+      if (options.keySupport) {
+        $keymgr.keydown(parseKey).blur(onBlur);
+        if (ie6mode || !options.fixedSupport) {
+          $keymgr.css({
+            position: 'absolute',
+            left: '-20px'
+          });
+          $keywrap.append($keymgr).insertBefore($img);
+        } else {
+          $keymgr.insertBefore($img);
+        }
+      }
+
+
+      return {
+        watchKeys: watchKeys
+      };
+    }());
+    //}}}
+    // }}}
+    // API methods {{{
+    function setClass(cname) //{{{
+    {
+      $div.removeClass().addClass(cssClass('holder')).addClass(cname);
+    }
+    //}}}
+    function animateTo(a, callback) //{{{
+    {
+      var x1 = a[0] / xscale,
+          y1 = a[1] / yscale,
+          x2 = a[2] / xscale,
+          y2 = a[3] / yscale;
+
+      if (animating) {
+        return;
+      }
+
+      var animto = Coords.flipCoords(x1, y1, x2, y2),
+          c = Coords.getFixed(),
+          initcr = [c.x, c.y, c.x2, c.y2],
+          animat = initcr,
+          interv = options.animationDelay,
+          ix1 = animto[0] - initcr[0],
+          iy1 = animto[1] - initcr[1],
+          ix2 = animto[2] - initcr[2],
+          iy2 = animto[3] - initcr[3],
+          pcent = 0,
+          velocity = options.swingSpeed;
+
+      x = animat[0];
+      y = animat[1];
+      x2 = animat[2];
+      y2 = animat[3];
+
+      Selection.animMode(true);
+      var anim_timer;
+
+      function queueAnimator() {
+        window.setTimeout(animator, interv);
+      }
+      var animator = (function () {
+        return function () {
+          pcent += (100 - pcent) / velocity;
+
+          animat[0] = x + ((pcent / 100) * ix1);
+          animat[1] = y + ((pcent / 100) * iy1);
+          animat[2] = x2 + ((pcent / 100) * ix2);
+          animat[3] = y2 + ((pcent / 100) * iy2);
+
+          if (pcent >= 99.8) {
+            pcent = 100;
+          }
+          if (pcent < 100) {
+            setSelectRaw(animat);
+            queueAnimator();
+          } else {
+            Selection.done();
+            if (typeof(callback) === 'function') {
+              callback.call(api);
+            }
+          }
+        };
+      }());
+      queueAnimator();
+    }
+    //}}}
+    function setSelect(rect) //{{{
+    {
+      setSelectRaw([rect[0] / xscale, rect[1] / yscale, rect[2] / xscale, rect[3] / yscale]);
+      options.onSelect.call(api, unscale(Coords.getFixed()));
+      Selection.enableHandles();
+    }
+    //}}}
+    function setSelectRaw(l) //{{{
+    {
+      Coords.setPressed([l[0], l[1]]);
+      Coords.setCurrent([l[2], l[3]]);
+      Selection.update();
+    }
+    //}}}
+    function tellSelect() //{{{
+    {
+      return unscale(Coords.getFixed());
+    }
+    //}}}
+    function tellScaled() //{{{
+    {
+      return Coords.getFixed();
+    }
+    //}}}
+    function setOptionsNew(opt) //{{{
+    {
+      setOptions(opt);
+      interfaceUpdate();
+    }
+    //}}}
+    function disableCrop() //{{{
+    {
+      options.disabled = true;
+      Selection.disableHandles();
+      Selection.setCursor('default');
+      Tracker.setCursor('default');
+    }
+    //}}}
+    function enableCrop() //{{{
+    {
+      options.disabled = false;
+      interfaceUpdate();
+    }
+    //}}}
+    function cancelCrop() //{{{
+    {
+      Selection.done();
+      Tracker.activateHandlers(null, null);
+    }
+    //}}}
+    function destroy() //{{{
+    {
+      $div.remove();
+      $origimg.show();
+      $(obj).removeData('Jcrop');
+    }
+    //}}}
+    function setImage(src, callback) //{{{
+    {
+      Selection.release();
+      disableCrop();
+      var img = new Image();
+      img.onload = function () {
+        var iw = img.width;
+        var ih = img.height;
+        var bw = options.boxWidth;
+        var bh = options.boxHeight;
+        $img.width(iw).height(ih);
+        $img.attr('src', src);
+        $img2.attr('src', src);
+        presize($img, bw, bh);
+        boundx = $img.width();
+        boundy = $img.height();
+        $img2.width(boundx).height(boundy);
+        $trk.width(boundx + (bound * 2)).height(boundy + (bound * 2));
+        $div.width(boundx).height(boundy);
+        Shade.resize(boundx,boundy);
+        enableCrop();
+
+        if (typeof(callback) === 'function') {
+          callback.call(api);
+        }
+      };
+      img.src = src;
+    }
+    //}}}
+    function colorChangeMacro($obj,color,now) {
+      var mycolor = color || options.bgColor;
+      if (options.bgFade && supportsColorFade() && options.fadeTime && !now) {
+        $obj.animate({
+          backgroundColor: mycolor
+        }, {
+          queue: false,
+          duration: options.fadeTime
+        });
+      } else {
+        $obj.css('backgroundColor', mycolor);
+      }
+    }
+    function interfaceUpdate(alt) //{{{
+    // This method tweaks the interface based on options object.
+    // Called when options are changed and at end of initialization.
+    {
+      if (options.allowResize) {
+        if (alt) {
+          Selection.enableOnly();
+        } else {
+          Selection.enableHandles();
+        }
+      } else {
+        Selection.disableHandles();
+      }
+
+      Tracker.setCursor(options.allowSelect ? 'crosshair' : 'default');
+      Selection.setCursor(options.allowMove ? 'move' : 'default');
+
+      if (options.hasOwnProperty('trueSize')) {
+        xscale = options.trueSize[0] / boundx;
+        yscale = options.trueSize[1] / boundy;
+      }
+
+      if (options.hasOwnProperty('setSelect')) {
+        setSelect(options.setSelect);
+        Selection.done();
+        delete(options.setSelect);
+      }
+
+      Shade.refresh();
+
+      if (options.bgColor != bgcolor) {
+        colorChangeMacro(
+          options.shade? Shade.getShades(): $div,
+          options.shade?
+            (options.shadeColor || options.bgColor):
+            options.bgColor
+        );
+        bgcolor = options.bgColor;
+      }
+
+      if (bgopacity != options.bgOpacity) {
+        bgopacity = options.bgOpacity;
+        if (options.shade) Shade.refresh();
+          else Selection.setBgOpacity(bgopacity);
+      }
+
+      xlimit = options.maxSize[0] || 0;
+      ylimit = options.maxSize[1] || 0;
+      xmin = options.minSize[0] || 0;
+      ymin = options.minSize[1] || 0;
+
+      if (options.hasOwnProperty('outerImage')) {
+        $img.attr('src', options.outerImage);
+        delete(options.outerImage);
+      }
+
+      Selection.refresh();
+    }
+    //}}}
+    //}}}
+
+    if (Touch.support) $trk.bind('touchstart.jcrop', Touch.newSelection);
+
+    $hdl_holder.hide();
+    interfaceUpdate(true);
+
+    var api = {
+      setImage: setImage,
+      animateTo: animateTo,
+      setSelect: setSelect,
+      setOptions: setOptionsNew,
+      tellSelect: tellSelect,
+      tellScaled: tellScaled,
+      setClass: setClass,
+
+      disable: disableCrop,
+      enable: enableCrop,
+      cancel: cancelCrop,
+      release: Selection.release,
+      destroy: destroy,
+
+      focus: KeyManager.watchKeys,
+
+      getBounds: function () {
+        return [boundx * xscale, boundy * yscale];
+      },
+      getWidgetSize: function () {
+        return [boundx, boundy];
+      },
+      getScaleFactor: function () {
+        return [xscale, yscale];
+      },
+      getOptions: function() {
+        // careful: internal values are returned
+        return options;
+      },
+
+      ui: {
+        holder: $div,
+        selection: $sel
+      }
+    };
+
+    if ($.browser.msie)
+      $div.bind('selectstart', function () { return false; });
+
+    $origimg.data('Jcrop', api);
+    return api;
+  };
+  $.fn.Jcrop = function (options, callback) //{{{
+  {
+    var api;
+    // Iterate over each object, attach Jcrop
+    this.each(function () {
+      // If we've already attached to this object
+      if ($(this).data('Jcrop')) {
+        // The API can be requested this way (undocumented)
+        if (options === 'api') return $(this).data('Jcrop');
+        // Otherwise, we just reset the options...
+        else $(this).data('Jcrop').setOptions(options);
+      }
+      // If we haven't been attached, preload and attach
+      else {
+        if (this.tagName == 'IMG')
+          $.Jcrop.Loader(this,function(){
+            $(this).css({display:'block',visibility:'hidden'});
+            api = $.Jcrop(this, options);
+            if ($.isFunction(callback)) callback.call(api);
+          });
+        else {
+          $(this).css({display:'block',visibility:'hidden'});
+          api = $.Jcrop(this, options);
+          if ($.isFunction(callback)) callback.call(api);
+        }
+      }
+    });
+
+    // Return "this" so the object is chainable (jQuery-style)
+    return this;
+  };
+  //}}}
+  // $.Jcrop.Loader - basic image loader {{{
+
+  $.Jcrop.Loader = function(imgobj,success,error){
+    var $img = $(imgobj), img = $img[0];
+
+    function completeCheck(){
+      if (img.complete) {
+        $img.unbind('.jcloader');
+        if ($.isFunction(success)) success.call(img);
+      }
+      else window.setTimeout(completeCheck,50);
+    }
+
+    $img
+      .bind('load.jcloader',completeCheck)
+      .bind('error.jcloader',function(e){
+        $img.unbind('.jcloader');
+        if ($.isFunction(error)) error.call(img);
+      });
+
+    if (img.complete && $.isFunction(success)){
+      $img.unbind('.jcloader');
+      success.call(img);
+    }
+  };
+
+  //}}}
+  // Global Defaults {{{
+  $.Jcrop.defaults = {
+
+    // Basic Settings
+    allowSelect: true,
+    allowMove: true,
+    allowResize: true,
+
+    trackDocument: true,
+
+    // Styling Options
+    baseClass: 'jcrop',
+    addClass: null,
+    bgColor: 'black',
+    bgOpacity: 0.6,
+    bgFade: false,
+    borderOpacity: 0.4,
+    handleOpacity: 0.5,
+    handleSize: 7,
+
+    aspectRatio: 0,
+    keySupport: true,
+    createHandles: ['n','s','e','w','nw','ne','se','sw'],
+    createDragbars: ['n','s','e','w'],
+    createBorders: ['n','s','e','w'],
+    drawBorders: true,
+    dragEdges: true,
+    fixedSupport: true,
+    touchSupport: null,
+
+    shade: null,
+
+    boxWidth: 0,
+    boxHeight: 0,
+    boundary: 2,
+    fadeTime: 400,
+    animationDelay: 20,
+    swingSpeed: 3,
+
+    minSelect: [0, 0],
+    maxSize: [0, 0],
+    minSize: [0, 0],
+
+    // Callbacks / Event Handlers
+    onChange: function () {},
+    onSelect: function () {},
+    onDblClick: function () {},
+    onRelease: function () {}
+  };
+
+  // }}}
+}(jQuery));
+
+define("jquery_jcrop", ["jquery"], function(){});
+
+define('patterns/image-crop',[
+    "jquery",
+    "../core/logger",
+    "../core/parser",
+    "../registry",
+    "jquery_jcrop"
+], function($, logger, Parser, registry) {
+    var log = logger.getLogger("pat.image-crop"),
+        parser = new Parser("image-crop");
+
+    parser.add_argument("preview-id", "");
+    parser.add_argument("preview-height", 0);
+    parser.add_argument("preview-width", 0);
+    parser.add_argument("aspect-ratio", 1);
+    parser.add_argument("form-id", "");
+    parser.add_argument("initial-sel", "0 0 0 0");
+    parser.add_argument("min-size", "0 0");
+    parser.add_argument("max-size", "0 0");
+    parser.add_argument("input-prefix", "");
+
+    var _ = {
+        name: "image-crop",
+        trigger: "img.pat-image-crop",
+        bounds: [0, 0],
+        inputNames: ["x1", "y1", "x2", "y2", "w", "h"],
+
+        init: function($el, options) {
+            // initialize the elements
+            return $el.each(function() {
+                var $this = $(this),
+                    opts = parser.parse($this, options),
+                    data = {};
+
+                // Initialize the preview parameters
+                if (opts.preview.id.length === 0)
+                    data.preview = false;
+                else {
+                    data.preview = {};
+                    data.preview.element = $(opts.preview.id);
+                    if (data.preview.element.length === 0) {
+                        log.error("Invalid preview element ID supplied: " + opts.preview.id);
+                        return;
+                    }
+                    if (opts.previewWidth > 0 && opts.preview.height > 0) {
+                        data.preview.width = opts.preview.width;
+                        data.preview.height = opts.preview.height;
+                    } else {
+                        data.preview.width = data.preview.element.parent().width();
+                        data.preview.height = data.preview.element.parent().height();
+                    }
+                }
+
+                // Set the form ID
+                if (opts.formId.length === 0) {
+                    // no form ID supplied. Look for the closest parent form element
+                    data.form = $this.closest("form");
+                    if (data.form.length === 0) {
+                        log.error("No form specified or found");
+                        return;
+                    }
+                } else {
+                    data.form = $(opts.formId);
+                    if (data.form.length === 0) {
+                        log.error("Invalid form ID supplied: " + opts.formId);
+                    }
+                }
+
+                // Setup form inputs
+                data.prefix = opts.inputPrefix;
+                data.inputs = {};
+                for (var i = 0; i < _.inputNames.length; i++)
+                    data.inputs[_.inputNames[i]] = _._setupInput(data.form, data.prefix, _.inputNames[i]);
+
+                //
+                // Initial coordinates
+                //
+                var ic = _._parseOpt(opts.initialSel);
+                if (ic.length !== 4)
+                    log.warn("Invalid coordinates for initial selection");
+                else if (ic[2] - ic[0] > 0 && ic[3] - ic[1] > 0)
+                    data.initialCoords = ic;
+
+                data.aspectRatio = opts.aspectRatio;
+                data.minSize = _._parseOpt(opts.minSize);
+                data.maxSize = _._parseOpt(opts.maxSize);
+
+                $this.data("patterns.image-crop", data);
+
+                $this.Jcrop({
+                    onChange: data.preview ? _.updatePreview : $.noop(),
+                    onSelect: _.onSelect,
+                    onRelease: _.updateInputs,
+                    aspectRatio: data.aspectRatio,
+                    setSelect: data.initialCoords,
+                    minSize: data.minSize,
+                    maxSize: data.maxSize
+                }, function() {
+                    this.element = $this;
+                    if (data.preview) {
+                        var selection = this.tellSelect();
+                        _.updatePreview(selection);
+                    }
+                });
+            });
+        },
+
+        _setupInput: function($form, prefix, name) {
+            var input = $form.find("input[name=" + prefix + name + "]");
+            if (input.length === 0)
+                input = $("<input type=\"hidden\" name=\"" + prefix + name + "\" />").appendTo($form);
+            return input;
+        },
+
+        _parseOpt: function(val) {
+            var ret = val.replace(/\s{2,}/g, " ").trim().split(" ");
+            for (var i = 0; i < ret.length; i++ )
+                ret[i] = parseInt(ret[i], 10);
+            return ret;
+        },
+
+        onSelect: function(c) {
+            var data = this.element.data("patterns.image-crop");
+            if (data.preview)
+                _.updatePreview.apply(this, [c, data]);
+            _.updateInputs.apply(this, [c, data]);
+        },
+
+        updatePreview: function(c, data) {
+            if (parseInt(c.w, 10) > 0) {
+                if (!data)
+                    data = this.element.data("patterns.image-crop");
+
+                var rx = data.preview.width/c.w, ry = data.preview.height/c.h,
+                    bounds = this.getBounds();
+
+                data.preview.element.css({
+                    width: Math.round( rx * bounds[0] ) + "px",
+                    height: Math.round( ry * bounds[1] ) + "px",
+                    marginLeft: "-" + Math.round(rx * c.x) + "px",
+                    marginTop: "-" + Math.round(ry * c.y) + "px"
+                });
+            }
+        },
+
+        updateInputs: function(c, data) {
+            if (c && c.w && parseInt(c.w, 10) > 0) {
+                if (!data)
+                    data = this.element.data("patterns.image-crop");
+
+                data.inputs.x1.attr("value", c.x);
+                data.inputs.y1.attr("value", c.y);
+                data.inputs.x2.attr("value", c.x2);
+                data.inputs.y2.attr("value", c.y2);
+                data.inputs.w.attr("value", c.w);
+                data.inputs.h.attr("value", c.h);
+            }
+        }
+    };
+
+    registry.register(_);
+    return _;
+});
+
+// jshint indent: 4, browser: true, jquery: true, quotmark: double
+// vim: sw=4 expandtab
+;
+var Markdown;
+
+if (typeof exports === "object" && typeof require === "function") // we're in a CommonJS (e.g. Node.js) module
+    Markdown = exports;
+else
+    // XXX: Modified with workaround for http://code.google.com/p/pagedown/issues/detail?id=49
+    Markdown = window.Markdown = {};
+    
+// The following text is included for historical reasons, but should
+// be taken with a pinch of salt; it's not all true anymore.
+
+//
+// Wherever possible, Showdown is a straight, line-by-line port
+// of the Perl version of Markdown.
+//
+// This is not a normal parser design; it's basically just a
+// series of string substitutions.  It's hard to read and
+// maintain this way,  but keeping Showdown close to the original
+// design makes it easier to port new features.
+//
+// More importantly, Showdown behaves like markdown.pl in most
+// edge cases.  So web applications can do client-side preview
+// in Javascript, and then build identical HTML on the server.
+//
+// This port needs the new RegExp functionality of ECMA 262,
+// 3rd Edition (i.e. Javascript 1.5).  Most modern web browsers
+// should do fine.  Even with the new regular expression features,
+// We do a lot of work to emulate Perl's regex functionality.
+// The tricky changes in this file mostly have the "attacklab:"
+// label.  Major or self-explanatory changes don't.
+//
+// Smart diff tools like Araxis Merge will be able to match up
+// this file with markdown.pl in a useful way.  A little tweaking
+// helps: in a copy of markdown.pl, replace "#" with "//" and
+// replace "$text" with "text".  Be sure to ignore whitespace
+// and line endings.
+//
+
+
+//
+// Usage:
+//
+//   var text = "Markdown *rocks*.";
+//
+//   var converter = new Markdown.Converter();
+//   var html = converter.makeHtml(text);
+//
+//   alert(html);
+//
+// Note: move the sample code to the bottom of this
+// file before uncommenting it.
+//
+
+(function () {
+
+    function identity(x) { return x; }
+    function returnFalse(x) { return false; }
+
+    function HookCollection() { }
+
+    HookCollection.prototype = {
+
+        chain: function (hookname, func) {
+            var original = this[hookname];
+            if (!original)
+                throw new Error("unknown hook " + hookname);
+
+            if (original === identity)
+                this[hookname] = func;
+            else
+                this[hookname] = function (x) { return func(original(x)); }
+        },
+        set: function (hookname, func) {
+            if (!this[hookname])
+                throw new Error("unknown hook " + hookname);
+            this[hookname] = func;
+        },
+        addNoop: function (hookname) {
+            this[hookname] = identity;
+        },
+        addFalse: function (hookname) {
+            this[hookname] = returnFalse;
+        }
+    };
+
+    Markdown.HookCollection = HookCollection;
+
+    // g_urls and g_titles allow arbitrary user-entered strings as keys. This
+    // caused an exception (and hence stopped the rendering) when the user entered
+    // e.g. [push] or [__proto__]. Adding a prefix to the actual key prevents this
+    // (since no builtin property starts with "s_"). See
+    // http://meta.stackoverflow.com/questions/64655/strange-wmd-bug
+    // (granted, switching from Array() to Object() alone would have left only __proto__
+    // to be a problem)
+    function SaveHash() { }
+    SaveHash.prototype = {
+        set: function (key, value) {
+            this["s_" + key] = value;
+        },
+        get: function (key) {
+            return this["s_" + key];
+        }
+    };
+
+    Markdown.Converter = function () {
+        var pluginHooks = this.hooks = new HookCollection();
+        pluginHooks.addNoop("plainLinkText");  // given a URL that was encountered by itself (without markup), should return the link text that's to be given to this link
+        pluginHooks.addNoop("preConversion");  // called with the orignal text as given to makeHtml. The result of this plugin hook is the actual markdown source that will be cooked
+        pluginHooks.addNoop("postConversion"); // called with the final cooked HTML code. The result of this plugin hook is the actual output of makeHtml
+
+        //
+        // Private state of the converter instance:
+        //
+
+        // Global hashes, used by various utility routines
+        var g_urls;
+        var g_titles;
+        var g_html_blocks;
+
+        // Used to track when we're inside an ordered or unordered list
+        // (see _ProcessListItems() for details):
+        var g_list_level;
+
+        this.makeHtml = function (text) {
+
+            //
+            // Main function. The order in which other subs are called here is
+            // essential. Link and image substitutions need to happen before
+            // _EscapeSpecialCharsWithinTagAttributes(), so that any *'s or _'s in the <a>
+            // and <img> tags get encoded.
+            //
+
+            // This will only happen if makeHtml on the same converter instance is called from a plugin hook.
+            // Don't do that.
+            if (g_urls)
+                throw new Error("Recursive call to converter.makeHtml");
+        
+            // Create the private state objects.
+            g_urls = new SaveHash();
+            g_titles = new SaveHash();
+            g_html_blocks = [];
+            g_list_level = 0;
+
+            text = pluginHooks.preConversion(text);
+
+            // attacklab: Replace ~ with ~T
+            // This lets us use tilde as an escape char to avoid md5 hashes
+            // The choice of character is arbitray; anything that isn't
+            // magic in Markdown will work.
+            text = text.replace(/~/g, "~T");
+
+            // attacklab: Replace $ with ~D
+            // RegExp interprets $ as a special character
+            // when it's in a replacement string
+            text = text.replace(/\$/g, "~D");
+
+            // Standardize line endings
+            text = text.replace(/\r\n/g, "\n"); // DOS to Unix
+            text = text.replace(/\r/g, "\n"); // Mac to Unix
+
+            // Make sure text begins and ends with a couple of newlines:
+            text = "\n\n" + text + "\n\n";
+
+            // Convert all tabs to spaces.
+            text = _Detab(text);
+
+            // Strip any lines consisting only of spaces and tabs.
+            // This makes subsequent regexen easier to write, because we can
+            // match consecutive blank lines with /\n+/ instead of something
+            // contorted like /[ \t]*\n+/ .
+            text = text.replace(/^[ \t]+$/mg, "");
+
+            // Turn block-level HTML blocks into hash entries
+            text = _HashHTMLBlocks(text);
+
+            // Strip link definitions, store in hashes.
+            text = _StripLinkDefinitions(text);
+
+            text = _RunBlockGamut(text);
+
+            text = _UnescapeSpecialChars(text);
+
+            // attacklab: Restore dollar signs
+            text = text.replace(/~D/g, "$$");
+
+            // attacklab: Restore tildes
+            text = text.replace(/~T/g, "~");
+
+            text = pluginHooks.postConversion(text);
+
+            g_html_blocks = g_titles = g_urls = null;
+
+            return text;
+        };
+
+        function _StripLinkDefinitions(text) {
+            //
+            // Strips link definitions from text, stores the URLs and titles in
+            // hash references.
+            //
+
+            // Link defs are in the form: ^[id]: url "optional title"
+
+            /*
+            text = text.replace(/
+                ^[ ]{0,3}\[(.+)\]:  // id = $1  attacklab: g_tab_width - 1
+                [ \t]*
+                \n?                 // maybe *one* newline
+                [ \t]*
+                <?(\S+?)>?          // url = $2
+                (?=\s|$)            // lookahead for whitespace instead of the lookbehind removed below
+                [ \t]*
+                \n?                 // maybe one newline
+                [ \t]*
+                (                   // (potential) title = $3
+                    (\n*)           // any lines skipped = $4 attacklab: lookbehind removed
+                    [ \t]+
+                    ["(]
+                    (.+?)           // title = $5
+                    [")]
+                    [ \t]*
+                )?                  // title is optional
+                (?:\n+|$)
+            /gm, function(){...});
+            */
+
+            text = text.replace(/^[ ]{0,3}\[(.+)\]:[ \t]*\n?[ \t]*<?(\S+?)>?(?=\s|$)[ \t]*\n?[ \t]*((\n*)["(](.+?)[")][ \t]*)?(?:\n+)/gm,
+                function (wholeMatch, m1, m2, m3, m4, m5) {
+                    m1 = m1.toLowerCase();
+                    g_urls.set(m1, _EncodeAmpsAndAngles(m2));  // Link IDs are case-insensitive
+                    if (m4) {
+                        // Oops, found blank lines, so it's not a title.
+                        // Put back the parenthetical statement we stole.
+                        return m3;
+                    } else if (m5) {
+                        g_titles.set(m1, m5.replace(/"/g, "&quot;"));
+                    }
+
+                    // Completely remove the definition from the text
+                    return "";
+                }
+            );
+
+            return text;
+        }
+
+        function _HashHTMLBlocks(text) {
+
+            // Hashify HTML blocks:
+            // We only want to do this for block-level HTML tags, such as headers,
+            // lists, and tables. That's because we still want to wrap <p>s around
+            // "paragraphs" that are wrapped in non-block-level tags, such as anchors,
+            // phrase emphasis, and spans. The list of tags we're looking for is
+            // hard-coded:
+            var block_tags_a = "p|div|h[1-6]|blockquote|pre|table|dl|ol|ul|script|noscript|form|fieldset|iframe|math|ins|del"
+            var block_tags_b = "p|div|h[1-6]|blockquote|pre|table|dl|ol|ul|script|noscript|form|fieldset|iframe|math"
+
+            // First, look for nested blocks, e.g.:
+            //   <div>
+            //     <div>
+            //     tags for inner block must be indented.
+            //     </div>
+            //   </div>
+            //
+            // The outermost tags must start at the left margin for this to match, and
+            // the inner nested divs must be indented.
+            // We need to do this before the next, more liberal match, because the next
+            // match will start at the first `<div>` and stop at the first `</div>`.
+
+            // attacklab: This regex can be expensive when it fails.
+
+            /*
+            text = text.replace(/
+                (                       // save in $1
+                    ^                   // start of line  (with /m)
+                    <($block_tags_a)    // start tag = $2
+                    \b                  // word break
+                                        // attacklab: hack around khtml/pcre bug...
+                    [^\r]*?\n           // any number of lines, minimally matching
+                    </\2>               // the matching end tag
+                    [ \t]*              // trailing spaces/tabs
+                    (?=\n+)             // followed by a newline
+                )                       // attacklab: there are sentinel newlines at end of document
+            /gm,function(){...}};
+            */
+            text = text.replace(/^(<(p|div|h[1-6]|blockquote|pre|table|dl|ol|ul|script|noscript|form|fieldset|iframe|math|ins|del)\b[^\r]*?\n<\/\2>[ \t]*(?=\n+))/gm, hashElement);
+
+            //
+            // Now match more liberally, simply from `\n<tag>` to `</tag>\n`
+            //
+
+            /*
+            text = text.replace(/
+                (                       // save in $1
+                    ^                   // start of line  (with /m)
+                    <($block_tags_b)    // start tag = $2
+                    \b                  // word break
+                                        // attacklab: hack around khtml/pcre bug...
+                    [^\r]*?             // any number of lines, minimally matching
+                    .*</\2>             // the matching end tag
+                    [ \t]*              // trailing spaces/tabs
+                    (?=\n+)             // followed by a newline
+                )                       // attacklab: there are sentinel newlines at end of document
+            /gm,function(){...}};
+            */
+            text = text.replace(/^(<(p|div|h[1-6]|blockquote|pre|table|dl|ol|ul|script|noscript|form|fieldset|iframe|math)\b[^\r]*?.*<\/\2>[ \t]*(?=\n+)\n)/gm, hashElement);
+
+            // Special case just for <hr />. It was easier to make a special case than
+            // to make the other regex more complicated.  
+
+            /*
+            text = text.replace(/
+                \n                  // Starting after a blank line
+                [ ]{0,3}
+                (                   // save in $1
+                    (<(hr)          // start tag = $2
+                        \b          // word break
+                        ([^<>])*?
+                    \/?>)           // the matching end tag
+                    [ \t]*
+                    (?=\n{2,})      // followed by a blank line
+                )
+            /g,hashElement);
+            */
+            text = text.replace(/\n[ ]{0,3}((<(hr)\b([^<>])*?\/?>)[ \t]*(?=\n{2,}))/g, hashElement);
+
+            // Special case for standalone HTML comments:
+
+            /*
+            text = text.replace(/
+                \n\n                                            // Starting after a blank line
+                [ ]{0,3}                                        // attacklab: g_tab_width - 1
+                (                                               // save in $1
+                    <!
+                    (--(?:|(?:[^>-]|-[^>])(?:[^-]|-[^-])*)--)   // see http://www.w3.org/TR/html-markup/syntax.html#comments and http://meta.stackoverflow.com/q/95256
+                    >
+                    [ \t]*
+                    (?=\n{2,})                                  // followed by a blank line
+                )
+            /g,hashElement);
+            */
+            text = text.replace(/\n\n[ ]{0,3}(<!(--(?:|(?:[^>-]|-[^>])(?:[^-]|-[^-])*)--)>[ \t]*(?=\n{2,}))/g, hashElement);
+
+            // PHP and ASP-style processor instructions (<?...?> and <%...%>)
+
+            /*
+            text = text.replace(/
+                (?:
+                    \n\n            // Starting after a blank line
+                )
+                (                   // save in $1
+                    [ ]{0,3}        // attacklab: g_tab_width - 1
+                    (?:
+                        <([?%])     // $2
+                        [^\r]*?
+                        \2>
+                    )
+                    [ \t]*
+                    (?=\n{2,})      // followed by a blank line
+                )
+            /g,hashElement);
+            */
+            text = text.replace(/(?:\n\n)([ ]{0,3}(?:<([?%])[^\r]*?\2>)[ \t]*(?=\n{2,}))/g, hashElement);
+
+            return text;
+        }
+
+        function hashElement(wholeMatch, m1) {
+            var blockText = m1;
+
+            // Undo double lines
+            blockText = blockText.replace(/^\n+/, "");
+
+            // strip trailing blank lines
+            blockText = blockText.replace(/\n+$/g, "");
+
+            // Replace the element text with a marker ("~KxK" where x is its key)
+            blockText = "\n\n~K" + (g_html_blocks.push(blockText) - 1) + "K\n\n";
+
+            return blockText;
+        }
+
+        function _RunBlockGamut(text, doNotUnhash) {
+            //
+            // These are all the transformations that form block-level
+            // tags like paragraphs, headers, and list items.
+            //
+            text = _DoHeaders(text);
+
+            // Do Horizontal Rules:
+            var replacement = "<hr />\n";
+            text = text.replace(/^[ ]{0,2}([ ]?\*[ ]?){3,}[ \t]*$/gm, replacement);
+            text = text.replace(/^[ ]{0,2}([ ]?-[ ]?){3,}[ \t]*$/gm, replacement);
+            text = text.replace(/^[ ]{0,2}([ ]?_[ ]?){3,}[ \t]*$/gm, replacement);
+
+            text = _DoLists(text);
+            text = _DoCodeBlocks(text);
+            text = _DoBlockQuotes(text);
+
+            // We already ran _HashHTMLBlocks() before, in Markdown(), but that
+            // was to escape raw HTML in the original Markdown source. This time,
+            // we're escaping the markup we've just created, so that we don't wrap
+            // <p> tags around block-level tags.
+            text = _HashHTMLBlocks(text);
+            text = _FormParagraphs(text, doNotUnhash);
+
+            return text;
+        }
+
+        function _RunSpanGamut(text) {
+            //
+            // These are all the transformations that occur *within* block-level
+            // tags like paragraphs, headers, and list items.
+            //
+
+            text = _DoCodeSpans(text);
+            text = _EscapeSpecialCharsWithinTagAttributes(text);
+            text = _EncodeBackslashEscapes(text);
+
+            // Process anchor and image tags. Images must come first,
+            // because ![foo][f] looks like an anchor.
+            text = _DoImages(text);
+            text = _DoAnchors(text);
+
+            // Make links out of things like `<http://example.com/>`
+            // Must come after _DoAnchors(), because you can use < and >
+            // delimiters in inline links like [this](<url>).
+            text = _DoAutoLinks(text);
+            
+            text = text.replace(/~P/g, "://"); // put in place to prevent autolinking; reset now
+            
+            text = _EncodeAmpsAndAngles(text);
+            text = _DoItalicsAndBold(text);
+
+            // Do hard breaks:
+            text = text.replace(/  +\n/g, " <br>\n");
+
+            return text;
+        }
+
+        function _EscapeSpecialCharsWithinTagAttributes(text) {
+            //
+            // Within tags -- meaning between < and > -- encode [\ ` * _] so they
+            // don't conflict with their use in Markdown for code, italics and strong.
+            //
+
+            // Build a regex to find HTML tags and comments.  See Friedl's 
+            // "Mastering Regular Expressions", 2nd Ed., pp. 200-201.
+
+            // SE: changed the comment part of the regex
+
+            var regex = /(<[a-z\/!$]("[^"]*"|'[^']*'|[^'">])*>|<!(--(?:|(?:[^>-]|-[^>])(?:[^-]|-[^-])*)--)>)/gi;
+
+            text = text.replace(regex, function (wholeMatch) {
+                var tag = wholeMatch.replace(/(.)<\/?code>(?=.)/g, "$1`");
+                tag = escapeCharacters(tag, wholeMatch.charAt(1) == "!" ? "\\`*_/" : "\\`*_"); // also escape slashes in comments to prevent autolinking there -- http://meta.stackoverflow.com/questions/95987
+                return tag;
+            });
+
+            return text;
+        }
+
+        function _DoAnchors(text) {
+            //
+            // Turn Markdown link shortcuts into XHTML <a> tags.
+            //
+            //
+            // First, handle reference-style links: [link text] [id]
+            //
+
+            /*
+            text = text.replace(/
+                (                           // wrap whole match in $1
+                    \[
+                    (
+                        (?:
+                            \[[^\]]*\]      // allow brackets nested one level
+                            |
+                            [^\[]           // or anything else
+                        )*
+                    )
+                    \]
+
+                    [ ]?                    // one optional space
+                    (?:\n[ ]*)?             // one optional newline followed by spaces
+
+                    \[
+                    (.*?)                   // id = $3
+                    \]
+                )
+                ()()()()                    // pad remaining backreferences
+            /g, writeAnchorTag);
+            */
+            text = text.replace(/(\[((?:\[[^\]]*\]|[^\[\]])*)\][ ]?(?:\n[ ]*)?\[(.*?)\])()()()()/g, writeAnchorTag);
+
+            //
+            // Next, inline-style links: [link text](url "optional title")
+            //
+
+            /*
+            text = text.replace(/
+                (                           // wrap whole match in $1
+                    \[
+                    (
+                        (?:
+                            \[[^\]]*\]      // allow brackets nested one level
+                            |
+                            [^\[\]]         // or anything else
+                        )*
+                    )
+                    \]
+                    \(                      // literal paren
+                    [ \t]*
+                    ()                      // no id, so leave $3 empty
+                    <?(                     // href = $4
+                        (?:
+                            \([^)]*\)       // allow one level of (correctly nested) parens (think MSDN)
+                            |
+                            [^()\s]
+                        )*?
+                    )>?                
+                    [ \t]*
+                    (                       // $5
+                        (['"])              // quote char = $6
+                        (.*?)               // Title = $7
+                        \6                  // matching quote
+                        [ \t]*              // ignore any spaces/tabs between closing quote and )
+                    )?                      // title is optional
+                    \)
+                )
+            /g, writeAnchorTag);
+            */
+
+            text = text.replace(/(\[((?:\[[^\]]*\]|[^\[\]])*)\]\([ \t]*()<?((?:\([^)]*\)|[^()\s])*?)>?[ \t]*((['"])(.*?)\6[ \t]*)?\))/g, writeAnchorTag);
+
+            //
+            // Last, handle reference-style shortcuts: [link text]
+            // These must come last in case you've also got [link test][1]
+            // or [link test](/foo)
+            //
+
+            /*
+            text = text.replace(/
+                (                   // wrap whole match in $1
+                    \[
+                    ([^\[\]]+)      // link text = $2; can't contain '[' or ']'
+                    \]
+                )
+                ()()()()()          // pad rest of backreferences
+            /g, writeAnchorTag);
+            */
+            text = text.replace(/(\[([^\[\]]+)\])()()()()()/g, writeAnchorTag);
+
+            return text;
+        }
+
+        function writeAnchorTag(wholeMatch, m1, m2, m3, m4, m5, m6, m7) {
+            if (m7 == undefined) m7 = "";
+            var whole_match = m1;
+            var link_text = m2.replace(/:\/\//g, "~P"); // to prevent auto-linking withing the link. will be converted back after the auto-linker runs
+            var link_id = m3.toLowerCase();
+            var url = m4;
+            var title = m7;
+
+            if (url == "") {
+                if (link_id == "") {
+                    // lower-case and turn embedded newlines into spaces
+                    link_id = link_text.toLowerCase().replace(/ ?\n/g, " ");
+                }
+                url = "#" + link_id;
+
+                if (g_urls.get(link_id) != undefined) {
+                    url = g_urls.get(link_id);
+                    if (g_titles.get(link_id) != undefined) {
+                        title = g_titles.get(link_id);
+                    }
+                }
+                else {
+                    if (whole_match.search(/\(\s*\)$/m) > -1) {
+                        // Special case for explicit empty url
+                        url = "";
+                    } else {
+                        return whole_match;
+                    }
+                }
+            }
+            url = encodeProblemUrlChars(url);
+            url = escapeCharacters(url, "*_");
+            var result = "<a href=\"" + url + "\"";
+
+            if (title != "") {
+                title = attributeEncode(title);
+                title = escapeCharacters(title, "*_");
+                result += " title=\"" + title + "\"";
+            }
+
+            result += ">" + link_text + "</a>";
+
+            return result;
+        }
+
+        function _DoImages(text) {
+            //
+            // Turn Markdown image shortcuts into <img> tags.
+            //
+
+            //
+            // First, handle reference-style labeled images: ![alt text][id]
+            //
+
+            /*
+            text = text.replace(/
+                (                   // wrap whole match in $1
+                    !\[
+                    (.*?)           // alt text = $2
+                    \]
+
+                    [ ]?            // one optional space
+                    (?:\n[ ]*)?     // one optional newline followed by spaces
+
+                    \[
+                    (.*?)           // id = $3
+                    \]
+                )
+                ()()()()            // pad rest of backreferences
+            /g, writeImageTag);
+            */
+            text = text.replace(/(!\[(.*?)\][ ]?(?:\n[ ]*)?\[(.*?)\])()()()()/g, writeImageTag);
+
+            //
+            // Next, handle inline images:  ![alt text](url "optional title")
+            // Don't forget: encode * and _
+
+            /*
+            text = text.replace(/
+                (                   // wrap whole match in $1
+                    !\[
+                    (.*?)           // alt text = $2
+                    \]
+                    \s?             // One optional whitespace character
+                    \(              // literal paren
+                    [ \t]*
+                    ()              // no id, so leave $3 empty
+                    <?(\S+?)>?      // src url = $4
+                    [ \t]*
+                    (               // $5
+                        (['"])      // quote char = $6
+                        (.*?)       // title = $7
+                        \6          // matching quote
+                        [ \t]*
+                    )?              // title is optional
+                    \)
+                )
+            /g, writeImageTag);
+            */
+            text = text.replace(/(!\[(.*?)\]\s?\([ \t]*()<?(\S+?)>?[ \t]*((['"])(.*?)\6[ \t]*)?\))/g, writeImageTag);
+
+            return text;
+        }
+        
+        function attributeEncode(text) {
+            // unconditionally replace angle brackets here -- what ends up in an attribute (e.g. alt or title)
+            // never makes sense to have verbatim HTML in it (and the sanitizer would totally break it)
+            return text.replace(/>/g, "&gt;").replace(/</g, "&lt;").replace(/"/g, "&quot;");
+        }
+
+        function writeImageTag(wholeMatch, m1, m2, m3, m4, m5, m6, m7) {
+            var whole_match = m1;
+            var alt_text = m2;
+            var link_id = m3.toLowerCase();
+            var url = m4;
+            var title = m7;
+
+            if (!title) title = "";
+
+            if (url == "") {
+                if (link_id == "") {
+                    // lower-case and turn embedded newlines into spaces
+                    link_id = alt_text.toLowerCase().replace(/ ?\n/g, " ");
+                }
+                url = "#" + link_id;
+
+                if (g_urls.get(link_id) != undefined) {
+                    url = g_urls.get(link_id);
+                    if (g_titles.get(link_id) != undefined) {
+                        title = g_titles.get(link_id);
+                    }
+                }
+                else {
+                    return whole_match;
+                }
+            }
+            
+            alt_text = escapeCharacters(attributeEncode(alt_text), "*_[]()");
+            url = escapeCharacters(url, "*_");
+            var result = "<img src=\"" + url + "\" alt=\"" + alt_text + "\"";
+
+            // attacklab: Markdown.pl adds empty title attributes to images.
+            // Replicate this bug.
+
+            //if (title != "") {
+            title = attributeEncode(title);
+            title = escapeCharacters(title, "*_");
+            result += " title=\"" + title + "\"";
+            //}
+
+            result += " />";
+
+            return result;
+        }
+
+        function _DoHeaders(text) {
+
+            // Setext-style headers:
+            //  Header 1
+            //  ========
+            //  
+            //  Header 2
+            //  --------
+            //
+            text = text.replace(/^(.+)[ \t]*\n=+[ \t]*\n+/gm,
+                function (wholeMatch, m1) { return "<h1>" + _RunSpanGamut(m1) + "</h1>\n\n"; }
+            );
+
+            text = text.replace(/^(.+)[ \t]*\n-+[ \t]*\n+/gm,
+                function (matchFound, m1) { return "<h2>" + _RunSpanGamut(m1) + "</h2>\n\n"; }
+            );
+
+            // atx-style headers:
+            //  # Header 1
+            //  ## Header 2
+            //  ## Header 2 with closing hashes ##
+            //  ...
+            //  ###### Header 6
+            //
+
+            /*
+            text = text.replace(/
+                ^(\#{1,6})      // $1 = string of #'s
+                [ \t]*
+                (.+?)           // $2 = Header text
+                [ \t]*
+                \#*             // optional closing #'s (not counted)
+                \n+
+            /gm, function() {...});
+            */
+
+            text = text.replace(/^(\#{1,6})[ \t]*(.+?)[ \t]*\#*\n+/gm,
+                function (wholeMatch, m1, m2) {
+                    var h_level = m1.length;
+                    return "<h" + h_level + ">" + _RunSpanGamut(m2) + "</h" + h_level + ">\n\n";
+                }
+            );
+
+            return text;
+        }
+
+        function _DoLists(text) {
+            //
+            // Form HTML ordered (numbered) and unordered (bulleted) lists.
+            //
+
+            // attacklab: add sentinel to hack around khtml/safari bug:
+            // http://bugs.webkit.org/show_bug.cgi?id=11231
+            text += "~0";
+
+            // Re-usable pattern to match any entirel ul or ol list:
+
+            /*
+            var whole_list = /
+                (                                   // $1 = whole list
+                    (                               // $2
+                        [ ]{0,3}                    // attacklab: g_tab_width - 1
+                        ([*+-]|\d+[.])              // $3 = first list item marker
+                        [ \t]+
+                    )
+                    [^\r]+?
+                    (                               // $4
+                        ~0                          // sentinel for workaround; should be $
+                        |
+                        \n{2,}
+                        (?=\S)
+                        (?!                         // Negative lookahead for another list item marker
+                            [ \t]*
+                            (?:[*+-]|\d+[.])[ \t]+
+                        )
+                    )
+                )
+            /g
+            */
+            var whole_list = /^(([ ]{0,3}([*+-]|\d+[.])[ \t]+)[^\r]+?(~0|\n{2,}(?=\S)(?![ \t]*(?:[*+-]|\d+[.])[ \t]+)))/gm;
+
+            if (g_list_level) {
+                text = text.replace(whole_list, function (wholeMatch, m1, m2) {
+                    var list = m1;
+                    var list_type = (m2.search(/[*+-]/g) > -1) ? "ul" : "ol";
+
+                    var result = _ProcessListItems(list, list_type);
+
+                    // Trim any trailing whitespace, to put the closing `</$list_type>`
+                    // up on the preceding line, to get it past the current stupid
+                    // HTML block parser. This is a hack to work around the terrible
+                    // hack that is the HTML block parser.
+                    result = result.replace(/\s+$/, "");
+                    result = "<" + list_type + ">" + result + "</" + list_type + ">\n";
+                    return result;
+                });
+            } else {
+                whole_list = /(\n\n|^\n?)(([ ]{0,3}([*+-]|\d+[.])[ \t]+)[^\r]+?(~0|\n{2,}(?=\S)(?![ \t]*(?:[*+-]|\d+[.])[ \t]+)))/g;
+                text = text.replace(whole_list, function (wholeMatch, m1, m2, m3) {
+                    var runup = m1;
+                    var list = m2;
+
+                    var list_type = (m3.search(/[*+-]/g) > -1) ? "ul" : "ol";
+                    var result = _ProcessListItems(list, list_type);
+                    result = runup + "<" + list_type + ">\n" + result + "</" + list_type + ">\n";
+                    return result;
+                });
+            }
+
+            // attacklab: strip sentinel
+            text = text.replace(/~0/, "");
+
+            return text;
+        }
+
+        var _listItemMarkers = { ol: "\\d+[.]", ul: "[*+-]" };
+
+        function _ProcessListItems(list_str, list_type) {
+            //
+            //  Process the contents of a single ordered or unordered list, splitting it
+            //  into individual list items.
+            //
+            //  list_type is either "ul" or "ol".
+
+            // The $g_list_level global keeps track of when we're inside a list.
+            // Each time we enter a list, we increment it; when we leave a list,
+            // we decrement. If it's zero, we're not in a list anymore.
+            //
+            // We do this because when we're not inside a list, we want to treat
+            // something like this:
+            //
+            //    I recommend upgrading to version
+            //    8. Oops, now this line is treated
+            //    as a sub-list.
+            //
+            // As a single paragraph, despite the fact that the second line starts
+            // with a digit-period-space sequence.
+            //
+            // Whereas when we're inside a list (or sub-list), that line will be
+            // treated as the start of a sub-list. What a kludge, huh? This is
+            // an aspect of Markdown's syntax that's hard to parse perfectly
+            // without resorting to mind-reading. Perhaps the solution is to
+            // change the syntax rules such that sub-lists must start with a
+            // starting cardinal number; e.g. "1." or "a.".
+
+            g_list_level++;
+
+            // trim trailing blank lines:
+            list_str = list_str.replace(/\n{2,}$/, "\n");
+
+            // attacklab: add sentinel to emulate \z
+            list_str += "~0";
+
+            // In the original attacklab showdown, list_type was not given to this function, and anything
+            // that matched /[*+-]|\d+[.]/ would just create the next <li>, causing this mismatch:
+            //
+            //  Markdown          rendered by WMD        rendered by MarkdownSharp
+            //  ------------------------------------------------------------------
+            //  1. first          1. first               1. first
+            //  2. second         2. second              2. second
+            //  - third           3. third                   * third
+            //
+            // We changed this to behave identical to MarkdownSharp. This is the constructed RegEx,
+            // with {MARKER} being one of \d+[.] or [*+-], depending on list_type:
+        
+            /*
+            list_str = list_str.replace(/
+                (^[ \t]*)                       // leading whitespace = $1
+                ({MARKER}) [ \t]+               // list marker = $2
+                ([^\r]+?                        // list item text   = $3
+                    (\n+)
+                )
+                (?=
+                    (~0 | \2 ({MARKER}) [ \t]+)
+                )
+            /gm, function(){...});
+            */
+
+            var marker = _listItemMarkers[list_type];
+            var re = new RegExp("(^[ \\t]*)(" + marker + ")[ \\t]+([^\\r]+?(\\n+))(?=(~0|\\1(" + marker + ")[ \\t]+))", "gm");
+            var last_item_had_a_double_newline = false;
+            list_str = list_str.replace(re,
+                function (wholeMatch, m1, m2, m3) {
+                    var item = m3;
+                    var leading_space = m1;
+                    var ends_with_double_newline = /\n\n$/.test(item);
+                    var contains_double_newline = ends_with_double_newline || item.search(/\n{2,}/) > -1;
+
+                    if (contains_double_newline || last_item_had_a_double_newline) {
+                        item = _RunBlockGamut(_Outdent(item), /* doNotUnhash = */true);
+                    }
+                    else {
+                        // Recursion for sub-lists:
+                        item = _DoLists(_Outdent(item));
+                        item = item.replace(/\n$/, ""); // chomp(item)
+                        item = _RunSpanGamut(item);
+                    }
+                    last_item_had_a_double_newline = ends_with_double_newline;
+                    return "<li>" + item + "</li>\n";
+                }
+            );
+
+            // attacklab: strip sentinel
+            list_str = list_str.replace(/~0/g, "");
+
+            g_list_level--;
+            return list_str;
+        }
+
+        function _DoCodeBlocks(text) {
+            //
+            //  Process Markdown `<pre><code>` blocks.
+            //  
+
+            /*
+            text = text.replace(/
+                (?:\n\n|^)
+                (                               // $1 = the code block -- one or more lines, starting with a space/tab
+                    (?:
+                        (?:[ ]{4}|\t)           // Lines must start with a tab or a tab-width of spaces - attacklab: g_tab_width
+                        .*\n+
+                    )+
+                )
+                (\n*[ ]{0,3}[^ \t\n]|(?=~0))    // attacklab: g_tab_width
+            /g ,function(){...});
+            */
+
+            // attacklab: sentinel workarounds for lack of \A and \Z, safari\khtml bug
+            text += "~0";
+
+            text = text.replace(/(?:\n\n|^)((?:(?:[ ]{4}|\t).*\n+)+)(\n*[ ]{0,3}[^ \t\n]|(?=~0))/g,
+                function (wholeMatch, m1, m2) {
+                    var codeblock = m1;
+                    var nextChar = m2;
+
+                    codeblock = _EncodeCode(_Outdent(codeblock));
+                    codeblock = _Detab(codeblock);
+                    codeblock = codeblock.replace(/^\n+/g, ""); // trim leading newlines
+                    codeblock = codeblock.replace(/\n+$/g, ""); // trim trailing whitespace
+
+                    codeblock = "<pre><code>" + codeblock + "\n</code></pre>";
+
+                    return "\n\n" + codeblock + "\n\n" + nextChar;
+                }
+            );
+
+            // attacklab: strip sentinel
+            text = text.replace(/~0/, "");
+
+            return text;
+        }
+
+        function hashBlock(text) {
+            text = text.replace(/(^\n+|\n+$)/g, "");
+            return "\n\n~K" + (g_html_blocks.push(text) - 1) + "K\n\n";
+        }
+
+        function _DoCodeSpans(text) {
+            //
+            // * Backtick quotes are used for <code></code> spans.
+            // 
+            // * You can use multiple backticks as the delimiters if you want to
+            //   include literal backticks in the code span. So, this input:
+            //     
+            //      Just type ``foo `bar` baz`` at the prompt.
+            //     
+            //   Will translate to:
+            //     
+            //      <p>Just type <code>foo `bar` baz</code> at the prompt.</p>
+            //     
+            //   There's no arbitrary limit to the number of backticks you
+            //   can use as delimters. If you need three consecutive backticks
+            //   in your code, use four for delimiters, etc.
+            //
+            // * You can use spaces to get literal backticks at the edges:
+            //     
+            //      ... type `` `bar` `` ...
+            //     
+            //   Turns to:
+            //     
+            //      ... type <code>`bar`</code> ...
+            //
+
+            /*
+            text = text.replace(/
+                (^|[^\\])       // Character before opening ` can't be a backslash
+                (`+)            // $2 = Opening run of `
+                (               // $3 = The code block
+                    [^\r]*?
+                    [^`]        // attacklab: work around lack of lookbehind
+                )
+                \2              // Matching closer
+                (?!`)
+            /gm, function(){...});
+            */
+
+            text = text.replace(/(^|[^\\])(`+)([^\r]*?[^`])\2(?!`)/gm,
+                function (wholeMatch, m1, m2, m3, m4) {
+                    var c = m3;
+                    c = c.replace(/^([ \t]*)/g, ""); // leading whitespace
+                    c = c.replace(/[ \t]*$/g, ""); // trailing whitespace
+                    c = _EncodeCode(c);
+                    c = c.replace(/:\/\//g, "~P"); // to prevent auto-linking. Not necessary in code *blocks*, but in code spans. Will be converted back after the auto-linker runs.
+                    return m1 + "<code>" + c + "</code>";
+                }
+            );
+
+            return text;
+        }
+
+        function _EncodeCode(text) {
+            //
+            // Encode/escape certain characters inside Markdown code runs.
+            // The point is that in code, these characters are literals,
+            // and lose their special Markdown meanings.
+            //
+            // Encode all ampersands; HTML entities are not
+            // entities within a Markdown code span.
+            text = text.replace(/&/g, "&amp;");
+
+            // Do the angle bracket song and dance:
+            text = text.replace(/</g, "&lt;");
+            text = text.replace(/>/g, "&gt;");
+
+            // Now, escape characters that are magic in Markdown:
+            text = escapeCharacters(text, "\*_{}[]\\", false);
+
+            // jj the line above breaks this:
+            //---
+
+            //* Item
+
+            //   1. Subitem
+
+            //            special char: *
+            //---
+
+            return text;
+        }
+
+        function _DoItalicsAndBold(text) {
+
+            // <strong> must go first:
+            text = text.replace(/([\W_]|^)(\*\*|__)(?=\S)([^\r]*?\S[\*_]*)\2([\W_]|$)/g,
+            "$1<strong>$3</strong>$4");
+
+            text = text.replace(/([\W_]|^)(\*|_)(?=\S)([^\r\*_]*?\S)\2([\W_]|$)/g,
+            "$1<em>$3</em>$4");
+
+            return text;
+        }
+
+        function _DoBlockQuotes(text) {
+
+            /*
+            text = text.replace(/
+                (                           // Wrap whole match in $1
+                    (
+                        ^[ \t]*>[ \t]?      // '>' at the start of a line
+                        .+\n                // rest of the first line
+                        (.+\n)*             // subsequent consecutive lines
+                        \n*                 // blanks
+                    )+
+                )
+            /gm, function(){...});
+            */
+
+            text = text.replace(/((^[ \t]*>[ \t]?.+\n(.+\n)*\n*)+)/gm,
+                function (wholeMatch, m1) {
+                    var bq = m1;
+
+                    // attacklab: hack around Konqueror 3.5.4 bug:
+                    // "----------bug".replace(/^-/g,"") == "bug"
+
+                    bq = bq.replace(/^[ \t]*>[ \t]?/gm, "~0"); // trim one level of quoting
+
+                    // attacklab: clean up hack
+                    bq = bq.replace(/~0/g, "");
+
+                    bq = bq.replace(/^[ \t]+$/gm, "");     // trim whitespace-only lines
+                    bq = _RunBlockGamut(bq);             // recurse
+
+                    bq = bq.replace(/(^|\n)/g, "$1  ");
+                    // These leading spaces screw with <pre> content, so we need to fix that:
+                    bq = bq.replace(
+                            /(\s*<pre>[^\r]+?<\/pre>)/gm,
+                        function (wholeMatch, m1) {
+                            var pre = m1;
+                            // attacklab: hack around Konqueror 3.5.4 bug:
+                            pre = pre.replace(/^  /mg, "~0");
+                            pre = pre.replace(/~0/g, "");
+                            return pre;
+                        });
+
+                    return hashBlock("<blockquote>\n" + bq + "\n</blockquote>");
+                }
+            );
+            return text;
+        }
+
+        function _FormParagraphs(text, doNotUnhash) {
+            //
+            //  Params:
+            //    $text - string to process with html <p> tags
+            //
+
+            // Strip leading and trailing lines:
+            text = text.replace(/^\n+/g, "");
+            text = text.replace(/\n+$/g, "");
+
+            var grafs = text.split(/\n{2,}/g);
+            var grafsOut = [];
+            
+            var markerRe = /~K(\d+)K/;
+
+            //
+            // Wrap <p> tags.
+            //
+            var end = grafs.length;
+            for (var i = 0; i < end; i++) {
+                var str = grafs[i];
+
+                // if this is an HTML marker, copy it
+                if (markerRe.test(str)) {
+                    grafsOut.push(str);
+                }
+                else if (/\S/.test(str)) {
+                    str = _RunSpanGamut(str);
+                    str = str.replace(/^([ \t]*)/g, "<p>");
+                    str += "</p>"
+                    grafsOut.push(str);
+                }
+
+            }
+            //
+            // Unhashify HTML blocks
+            //
+            if (!doNotUnhash) {
+                end = grafsOut.length;
+                for (var i = 0; i < end; i++) {
+                    var foundAny = true;
+                    while (foundAny) { // we may need several runs, since the data may be nested
+                        foundAny = false;
+                        grafsOut[i] = grafsOut[i].replace(/~K(\d+)K/g, function (wholeMatch, id) {
+                            foundAny = true;
+                            return g_html_blocks[id];
+                        });
+                    }
+                }
+            }
+            return grafsOut.join("\n\n");
+        }
+
+        function _EncodeAmpsAndAngles(text) {
+            // Smart processing for ampersands and angle brackets that need to be encoded.
+
+            // Ampersand-encoding based entirely on Nat Irons's Amputator MT plugin:
+            //   http://bumppo.net/projects/amputator/
+            text = text.replace(/&(?!#?[xX]?(?:[0-9a-fA-F]+|\w+);)/g, "&amp;");
+
+            // Encode naked <'s
+            text = text.replace(/<(?![a-z\/?\$!])/gi, "&lt;");
+
+            return text;
+        }
+
+        function _EncodeBackslashEscapes(text) {
+            //
+            //   Parameter:  String.
+            //   Returns:    The string, with after processing the following backslash
+            //               escape sequences.
+            //
+
+            // attacklab: The polite way to do this is with the new
+            // escapeCharacters() function:
+            //
+            //     text = escapeCharacters(text,"\\",true);
+            //     text = escapeCharacters(text,"`*_{}[]()>#+-.!",true);
+            //
+            // ...but we're sidestepping its use of the (slow) RegExp constructor
+            // as an optimization for Firefox.  This function gets called a LOT.
+
+            text = text.replace(/\\(\\)/g, escapeCharacters_callback);
+            text = text.replace(/\\([`*_{}\[\]()>#+-.!])/g, escapeCharacters_callback);
+            return text;
+        }
+
+        function _DoAutoLinks(text) {
+
+            // note that at this point, all other URL in the text are already hyperlinked as <a href=""></a>
+            // *except* for the <http://www.foo.com> case
+
+            // automatically add < and > around unadorned raw hyperlinks
+            // must be preceded by space/BOF and followed by non-word/EOF character    
+            text = text.replace(/(^|\s)(https?|ftp)(:\/\/[-A-Z0-9+&@#\/%?=~_|\[\]\(\)!:,\.;]*[-A-Z0-9+&@#\/%=~_|\[\]])($|\W)/gi, "$1<$2$3>$4");
+
+            //  autolink anything like <http://example.com>
+            
+            var replacer = function (wholematch, m1) { return "<a href=\"" + m1 + "\">" + pluginHooks.plainLinkText(m1) + "</a>"; }
+            text = text.replace(/<((https?|ftp):[^'">\s]+)>/gi, replacer);
+
+            // Email addresses: <address@domain.foo>
+            /*
+            text = text.replace(/
+                <
+                (?:mailto:)?
+                (
+                    [-.\w]+
+                    \@
+                    [-a-z0-9]+(\.[-a-z0-9]+)*\.[a-z]+
+                )
+                >
+            /gi, _DoAutoLinks_callback());
+            */
+
+            /* disabling email autolinking, since we don't do that on the server, either
+            text = text.replace(/<(?:mailto:)?([-.\w]+\@[-a-z0-9]+(\.[-a-z0-9]+)*\.[a-z]+)>/gi,
+                function(wholeMatch,m1) {
+                    return _EncodeEmailAddress( _UnescapeSpecialChars(m1) );
+                }
+            );
+            */
+            return text;
+        }
+
+        function _UnescapeSpecialChars(text) {
+            //
+            // Swap back in all the special characters we've hidden.
+            //
+            text = text.replace(/~E(\d+)E/g,
+                function (wholeMatch, m1) {
+                    var charCodeToReplace = parseInt(m1);
+                    return String.fromCharCode(charCodeToReplace);
+                }
+            );
+            return text;
+        }
+
+        function _Outdent(text) {
+            //
+            // Remove one level of line-leading tabs or spaces
+            //
+
+            // attacklab: hack around Konqueror 3.5.4 bug:
+            // "----------bug".replace(/^-/g,"") == "bug"
+
+            text = text.replace(/^(\t|[ ]{1,4})/gm, "~0"); // attacklab: g_tab_width
+
+            // attacklab: clean up hack
+            text = text.replace(/~0/g, "")
+
+            return text;
+        }
+
+        function _Detab(text) {
+            if (!/\t/.test(text))
+                return text;
+
+            var spaces = ["    ", "   ", "  ", " "],
+            skew = 0,
+            v;
+
+            return text.replace(/[\n\t]/g, function (match, offset) {
+                if (match === "\n") {
+                    skew = offset + 1;
+                    return match;
+                }
+                v = (offset - skew) % 4;
+                skew = offset + 1;
+                return spaces[v];
+            });
+        }
+
+        //
+        //  attacklab: Utility functions
+        //
+
+        var _problemUrlChars = /(?:["'*()[\]:]|~D)/g;
+
+        // hex-encodes some unusual "problem" chars in URLs to avoid URL detection problems 
+        function encodeProblemUrlChars(url) {
+            if (!url)
+                return "";
+
+            var len = url.length;
+
+            return url.replace(_problemUrlChars, function (match, offset) {
+                if (match == "~D") // escape for dollar
+                    return "%24";
+                if (match == ":") {
+                    if (offset == len - 1 || /[0-9\/]/.test(url.charAt(offset + 1)))
+                        return ":"
+                }
+                return "%" + match.charCodeAt(0).toString(16);
+            });
+        }
+
+
+        function escapeCharacters(text, charsToEscape, afterBackslash) {
+            // First we have to escape the escape characters so that
+            // we can build a character class out of them
+            var regexString = "([" + charsToEscape.replace(/([\[\]\\])/g, "\\$1") + "])";
+
+            if (afterBackslash) {
+                regexString = "\\\\" + regexString;
+            }
+
+            var regex = new RegExp(regexString, "g");
+            text = text.replace(regex, escapeCharacters_callback);
+
+            return text;
+        }
+
+
+        function escapeCharacters_callback(wholeMatch, m1) {
+            var charCodeToEscape = m1.charCodeAt(0);
+            return "~E" + charCodeToEscape + "E";
+        }
+
+    }; // end of the Markdown.Converter constructor
+
+})();
+
+define("pagedown_converter", function(){});
+
+(function () {
+    var output, Converter;
+    if (typeof exports === "object" && typeof require === "function") { // we're in a CommonJS (e.g. Node.js) module
+        output = exports;
+        Converter = require("./Markdown.Converter").Converter;
+    } else {
+        output = window.Markdown;
+        Converter = output.Converter;
+    }
+        
+    output.getSanitizingConverter = function () {
+        var converter = new Converter();
+        converter.hooks.chain("postConversion", sanitizeHtml);
+        converter.hooks.chain("postConversion", balanceTags);
+        return converter;
+    }
+
+    function sanitizeHtml(html) {
+        return html.replace(/<[^>]*>?/gi, sanitizeTag);
+    }
+
+    // (tags that can be opened/closed) | (tags that stand alone)
+    var basic_tag_whitelist = /^(<\/?(b|blockquote|code|del|dd|dl|dt|em|h1|h2|h3|i|kbd|li|ol|p|pre|s|sup|sub|strong|strike|ul)>|<(br|hr)\s?\/?>)$/i;
+    // <a href="url..." optional title>|</a>
+    var a_white = /^(<a\shref="((https?|ftp):\/\/|\/)[-A-Za-z0-9+&@#\/%?=~_|!:,.;\(\)]+"(\stitle="[^"<>]+")?\s?>|<\/a>)$/i;
+
+    // <img src="url..." optional width  optional height  optional alt  optional title
+    var img_white = /^(<img\ssrc="(https?:\/\/|\/)[-A-Za-z0-9+&@#\/%?=~_|!:,.;\(\)]+"(\swidth="\d{1,3}")?(\sheight="\d{1,3}")?(\salt="[^"<>]*")?(\stitle="[^"<>]*")?\s?\/?>)$/i;
+
+    function sanitizeTag(tag) {
+        if (tag.match(basic_tag_whitelist) || tag.match(a_white) || tag.match(img_white))
+            return tag;
+        else
+            return "";
+    }
+
+    /// <summary>
+    /// attempt to balance HTML tags in the html string
+    /// by removing any unmatched opening or closing tags
+    /// IMPORTANT: we *assume* HTML has *already* been 
+    /// sanitized and is safe/sane before balancing!
+    /// 
+    /// adapted from CODESNIPPET: A8591DBA-D1D3-11DE-947C-BA5556D89593
+    /// </summary>
+    function balanceTags(html) {
+
+        if (html == "")
+            return "";
+
+        var re = /<\/?\w+[^>]*(\s|$|>)/g;
+        // convert everything to lower case; this makes
+        // our case insensitive comparisons easier
+        var tags = html.toLowerCase().match(re);
+
+        // no HTML tags present? nothing to do; exit now
+        var tagcount = (tags || []).length;
+        if (tagcount == 0)
+            return html;
+
+        var tagname, tag;
+        var ignoredtags = "<p><img><br><li><hr>";
+        var match;
+        var tagpaired = [];
+        var tagremove = [];
+        var needsRemoval = false;
+
+        // loop through matched tags in forward order
+        for (var ctag = 0; ctag < tagcount; ctag++) {
+            tagname = tags[ctag].replace(/<\/?(\w+).*/, "$1");
+            // skip any already paired tags
+            // and skip tags in our ignore list; assume they're self-closed
+            if (tagpaired[ctag] || ignoredtags.search("<" + tagname + ">") > -1)
+                continue;
+
+            tag = tags[ctag];
+            match = -1;
+
+            if (!/^<\//.test(tag)) {
+                // this is an opening tag
+                // search forwards (next tags), look for closing tags
+                for (var ntag = ctag + 1; ntag < tagcount; ntag++) {
+                    if (!tagpaired[ntag] && tags[ntag] == "</" + tagname + ">") {
+                        match = ntag;
+                        break;
+                    }
+                }
+            }
+
+            if (match == -1)
+                needsRemoval = tagremove[ctag] = true; // mark for removal
+            else
+                tagpaired[match] = true; // mark paired
+        }
+
+        if (!needsRemoval)
+            return html;
+
+        // delete all orphaned tags from the string
+
+        var ctag = 0;
+        html = html.replace(re, function (match) {
+            var res = tagremove[ctag] ? "" : match;
+            ctag++;
+            return res;
+        });
+        return html;
+    }
+})();
+
+define("pagedown_sanitizer", ["pagedown_converter"], function(){});
+
+define('patterns/markdown',[
+    "jquery",
+    "../registry",
+    "./inject",
+    "pagedown_converter",
+    "pagedown_sanitizer"
+], function($, registry, inject) {
+    var converter = Markdown.getSanitizingConverter();
+
+    var _ = {
+        name: "markdown",
+        trigger: ".pat-markdown",
+        url_re: /\.md$/,
+
+        init: function($el) {
+            return $el.each(function() {
+                var $this = $(this),
+                    source = $this.is(":input") ? this.value : $this.text(),
+                    $rendering = _._render(source);
+                $rendering.replaceAll($this);
+            });
+        },
+
+        _render: function(text) {
+            var $rendering = $("<div/>");
+            $rendering.html(converter.makeHtml(text));
+            return $rendering;
+        }
+    };
+
+    // XXX: Hack
+    $("a.pat-inject").on("patterns-inject-triggered.pat-markdown", function() {
+        var $this = $(this), cfgs = $this.data("patterns.inject");
+
+        if (_.url_re.test(cfgs[0].url)) {
+            cfgs.forEach(function(cfg) {
+                cfg.dataType = "markdown";
+            });
+        }
+    });
+
+    inject.registerTypeHandler("markdown", {
+        sources: function(cfgs, data) {
+            var $rendering = _._render(data);
+            return cfgs.map(function() { return $rendering; });
+        }
+    });
+
+    registry.register(_);
+    return _;
+});
+
 define('patterns/menu',[
-    'jquery',
+    "jquery",
     "../registry"
 ], function($, patterns) {
     var menu = {
@@ -48341,7 +53704,7 @@ define('patterns/menu',[
                     timer = setTimeout(function() { closeMenu($li); }, 1000);
                 };
 
-                $("ul.menu li", root)
+                $root.find("li")
                     .addClass("closed")
                     .filter(":has(ul)").addClass("hasChildren").end()
                     .on("mouseover.pat-menu", mouseOverHandler)
@@ -48356,81 +53719,12 @@ define('patterns/menu',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
-define('patterns/modal',[
-    'jquery',
-    '../logging',
-    "../core/parser",
-    "../registry",
-    "./inject"
-], function($, logging, Parser, registry, inject) {
-    var log = logging.getLogger('modal'),
-        parser = new Parser("modal");
-
-    parser.add_argument("class");
-
-    var modal = {
-        name: "modal",
-        // div's are turned into modals
-        // links and forms inject modals
-        trigger: "div.pat-modal, a.pat-modal, form.pat-modal",
-        init: function($el, opts) {
-            return $el.each(function() {
-                var $el = $(this),
-                    cfg = parser.parse($el, opts);
-
-                if ($el.is('div'))
-                    modal._init_div1($el, cfg);
-                else
-                    modal._init_inject1($el, cfg);
-            });
-        },
-        _init_inject1: function($el, cfg) {
-            var opts = {
-                target: '#pat-modal',
-                "class": "pat-modal" + (cfg["class"] ? " " + cfg["class"] : "")
-            };
-            $('#pat-modal').detach();
-            inject.init($el, opts);
-        },
-        _init_div1: function($el, cfg) {
-            var $header = $('<div class="header" />'),
-                $button = $(
-                    '<button type="button" class="close-panel">Close</button>'
-                ).appendTo($header);
-
-            // We cannot handle text nodes here
-            $el.children(':last, :not(:first)')
-                .wrapAll('<div class="panel-content" />');
-            $('.panel-content', $el).before($header);
-            $el.children(':first:not(.header)').prependTo($header);
-
-            // event handlers remove modal - first arg to bind is ``this``
-            $(document).on('click.pat-modal', '.close-panel',
-                           modal.destroy.bind($el, $el));
-            // remove on ESC
-            $(document).on('keyup.pat-modal',
-                           modal.destroy.bind($el, $el));
-        },
-        destroy: function($el, ev) {
-            if (ev && ev.type === "keyup" && ev.which !== 27)
-                return;
-            $(document).off('.pat-modal');
-            $el.remove();
-        }
-    };
-    registry.register(modal);
-    return modal;
-});
-
-// jshint indent: 4, browser: true, jquery: true, quotmark: double
-// vim: sw=4 expandtab
-;
 define('patterns/navigation',[
-    'jquery',
-    '../logging',
-    '../registry'
-], function($, logging, registry) {
-    var log = logging.getLogger('navigation');
+    "jquery",
+    "../core/logger",
+    "../registry"
+], function($, logger, registry) {
+    var log = logger.getLogger("pat.navigation");
 
     var _ = {
         name: "navigation",
@@ -48439,49 +53733,49 @@ define('patterns/navigation',[
             return $el.each(function() {
                 var $el = $(this);
                 var curpath = window.location.pathname;
-                log.debug('current path:', curpath);
+                log.debug("current path:", curpath);
 
                 // check whether to load
-                if ($el.hasClass('navigation-load-current')) {
-                    $el.find('a.current, .current a').click();
+                if ($el.hasClass("navigation-load-current")) {
+                    $el.find("a.current, .current a").click();
                     // check for current elements injected here
-                    $el.on('patterns-injected-scanned', function(ev) {
+                    $el.on("patterns-injected-scanned", function(ev) {
                         var $target = $(ev.target);
-                        if ($target.is('a.current'))
+                        if ($target.is("a.current"))
                             $target.click();
-                        if ($target.is('.current'))
-                            $target.find('a').click();
+                        if ($target.is(".current"))
+                            $target.find("a").click();
                         _._updatenavpath($el);
                     });
                 }
 
                 // An element within this navigation triggered injection
-                $el.on('patterns-inject-triggered', function(ev) {
+                $el.on("patterns-inject-triggered", function(ev) {
                     var $target = $(ev.target);
 
                     // remove all set current classes
-                    $el.find('.current').removeClass('current');
+                    $el.find(".current").removeClass("current");
 
                     // set .current on target
-                    $target.addClass('current');
+                    $target.addClass("current");
 
                     // If target's parent is an LI, also set current there
-                    $target.parent('li').addClass('current');
+                    $target.parent("li").addClass("current");
 
                     _._updatenavpath($el);
                 });
 
                 // set current class if it is not set
-                if ($el.find('.current').length === 0) {
-                    $el.find('li a').each(function() {
+                if ($el.find(".current").length === 0) {
+                    $el.find("li a").each(function() {
                         var $a = $(this),
-                            $li = $a.parents('li:first'),
-                            url = $a.attr('href'),
+                            $li = $a.parents("li:first"),
+                            url = $a.attr("href"),
                             path = _._pathfromurl(url);
-                        log.debug('checking url:', url, 'extracted path:', path);
+                        log.debug("checking url:", url, "extracted path:", path);
                         if (_._match(curpath, path)) {
-                            log.debug('found match', $li);
-                            $li.addClass('current');
+                            log.debug("found match", $li);
+                            $li.addClass("current");
                         }
                     });
                 }
@@ -48490,18 +53784,18 @@ define('patterns/navigation',[
             });
         },
         _updatenavpath: function($el) {
-            $el.find('.navigation-in-path').removeClass('navigation-in-path');
-            $el.find('li:has(.current)').addClass('navigation-in-path');
+            $el.find(".navigation-in-path").removeClass("navigation-in-path");
+            $el.find("li:has(.current)").addClass("navigation-in-path");
         },
         _match: function(curpath, path) {
             if (!path) {
-                log.debug('path empty');
+                log.debug("path empty");
                 return false;
             }
 
             // current path needs to end in the anchor's path
             if (path !== curpath.slice(- path.length)) {
-                log.debug(curpath, 'does not end in', path);
+                log.debug(curpath, "does not end in", path);
                 return false;
             }
 
@@ -48509,13 +53803,13 @@ define('patterns/navigation',[
             return true;
         },
         _pathfromurl: function(url) {
-            var path = url.split('#')[0].split('://');
+            var path = url.split("#")[0].split("://");
             if (path.length > 2) {
-                log.error('weird url', url);
-                return '';
+                log.error("weird url", url);
+                return "";
             }
             if (path.length === 1) return path[0];
-            return path[1].split('/').slice(1).join('/');
+            return path[1].split("/").slice(1).join("/");
         }
     };
 
@@ -48687,8 +53981,8 @@ define("jquery_placeholder", ["jquery"], function(){});
 
 define('patterns/placeholder',[
     "../registry",
-    'modernizr',
-    'jquery_placeholder'
+    "modernizr",
+    "jquery_placeholder"
 ], function(patterns) {
     var pattern_spec = {
         name: "placeholder",
@@ -48715,10 +54009,10 @@ define('patterns/placeholder',[
  * Copyright 2011 SYSLAB.COM GmbH
  */
 define('patterns/setclass',[
-    'jquery',
+    "jquery",
     "../registry",
-    '../core/store',
-    '../utils'
+    "../core/store",
+    "../utils"
 ], function($, patterns, store, utils) {
     var storage = store.session("setclass");
 
@@ -48732,7 +54026,7 @@ define('patterns/setclass',[
                 var $this = $(this);
                 var obj = setclass.getObjFromParams(
                               $this,
-                              utils.extractParameters('!' + $this.attr('data-setclass')));
+                              utils.extractParameters("!" + $this.attr("data-setclass")));
 
                 if (obj === null)
                     return;
@@ -48742,7 +54036,7 @@ define('patterns/setclass',[
                 } else if (storage.get(obj.id + "." + obj.attr))
                     return;
 
-                if (obj.attr === 'class') {
+                if (obj.attr === "class") {
                 //    $( "#" + obj.id ).addClass( obj.value );  // removed the removeClass which was used in toggle
                 } else {
                     $( "#" + obj.id ).attr( obj.attr, obj.value );
@@ -48755,7 +54049,7 @@ define('patterns/setclass',[
             var all = storage.all();
             for (var key in all ) {
                 var obj = all[key];
-                if ( obj.attr === 'class' ) {
+                if ( obj.attr === "class" ) {
                     $( "#" + obj.id ).removeClass( obj.other ).addClass( obj.value );
                 } else {
                     $( "#" + obj.id ).attr( obj.attr, obj.value );
@@ -48768,18 +54062,18 @@ define('patterns/setclass',[
             var obj = {};
 
             obj.id = params.id || $elem.attr("id");
-            obj.attr = params.attr || 'class';
+            obj.attr = params.attr || "class";
             obj.store = params.store || false;
 
             if (typeof obj.id !== "string" || obj.id.length === 0 ||
-                typeof obj.attr !== 'string' || obj.attr.length === 0 ||
-                typeof values  !== 'string' || values.length === 0 ) {
+                typeof obj.attr !== "string" || obj.attr.length === 0 ||
+                typeof values  !== "string" || values.length === 0 ) {
                 return null;
             }
 
-            values = values.split(':');
-            if ( values.length == 1) {
-                values.push('');
+            values = values.split(":");
+            if ( values.length === 1) {
+                values.push("");
             }
 
             obj.value = values[0];
@@ -48789,10 +54083,10 @@ define('patterns/setclass',[
 
         onClick: function(event) {
             var $this = $(this);
-            if ($this.hasClass('cant-touch-this')) return;
-            var params = utils.extractParameters('!' + $this.attr('data-setclass'));
+            if ($this.hasClass("cant-touch-this")) return;
+            var params = utils.extractParameters("!" + $this.attr("data-setclass"));
 
-            setclass.execute($this, '', '', params, event);
+            setclass.execute($this, "", "", params, event);
 
             event.preventDefault();
         },
@@ -48801,19 +54095,18 @@ define('patterns/setclass',[
 
         dataAttr: true,
 
-        execute: function( elem, url, sources, params, event ) {
-            var value, other;
+        execute: function( elem, url, sources, params) {
             var obj = setclass.getObjFromParams( elem, params );
             if (obj === null) return false;
 
             var $setclass = $("#" + obj.id);
             if ($setclass.length === 0) return false;
 
-            if (obj.attr === 'class') {
+            if (obj.attr === "class") {
                 if (obj.other.length > 0 ) {
-                    var cls = $setclass.attr('class').split(' ');
-                    regval = new RegExp(obj.value);
-                    for (i=0;i<cls.length;i++){
+                    var cls = $setclass.attr("class").split(" "),
+                        regval = new RegExp(obj.value);
+                    for (var i=0;i<cls.length;i++){
                         if (cls[i].match(regval)) {
                             $setclass.removeClass(cls[i]);
                         }
@@ -48855,30 +54148,109 @@ define('patterns/setclass',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
-// XXX This pattern has an undeclared dependency on jQuery UI
-define('patterns/sorting',[
-    'jquery',
+define('patterns/sortable',[
+    "jquery",
     "../registry"
 ], function($, patterns) {
-    var sorting = {
-        name: "sorting",
-        trigger: "ul.sorting",
+    var _ = {
+        name: "sortable",
+        trigger: "ul.pat-sortable",
 
         init: function($el) {
-            return $el.sortable({
-                'axis': 'y',
-                'items': 'li',
-                'update': function(event, ui){
-                    var $this = $(this);
-                    var order = $this.sortable("serialize");
+            if ($el.length > 1)
+                return $el.each(function() { _.init($(this)); });
 
-                    $.post($this.attr("data-injection"), order);
-                }
+            // use only direct descendants to support nested lists
+            var $lis = $el.children().filter("li");
+
+            // add handles and make them draggable for HTML5 and IE8/9
+            // it has to be an "a" tag (or img) to make it draggable in IE8/9
+            var $handles = $("<a href=\"#\" class=\"handle\"></a>").appendTo($lis);
+            if("draggable" in document.createElement("span"))
+                $handles.attr("draggable", true);
+            else
+                $handles.bind("selectstart", function(event) {
+                    event.preventDefault();
+                });
+
+            // invisible scroll activation areas
+            var scrollup = $("<div id=\"pat-scroll-up\">&nbsp;</div>"),
+                scrolldn = $("<div id=\"pat-scroll-dn\">&nbsp;</div>"),
+                scroll = $().add(scrollup).add(scrolldn);
+
+            scrollup.css({ top:0 });
+            scrolldn.css({ bottom: 0 });
+            scroll.css({
+                position: "fixed", zIndex: 999999,
+                height: 32, left: 0, right: 0
             });
+
+            scroll.bind("dragover", function(event) {
+                event.preventDefault();
+                if ($("html,body").is(":animated")) return;
+
+                var newpos = $(window).scrollTop() +
+                    ($(this).attr("id")==="pat-scroll-up" ? -32 : 32);
+
+                $("html,body").animate({scrollTop: newpos}, 50, "linear");
+            });
+
+            $handles.bind("dragstart", function(event) {
+                // Firefox seems to need this set to any value
+                event.originalEvent.dataTransfer.setData("Text", "");
+                event.originalEvent.dataTransfer.effectAllowed = ["move"];
+                if ("setDragImage" in event.originalEvent.dataTransfer)
+                    event.originalEvent.dataTransfer.setDragImage(
+                        $(this).parent()[0], 0, 0);
+                $(this).parent().addClass("dragged");
+
+                // list elements are only drop targets when one element of the
+                // list is being dragged. avoids dragging between lists.
+                $lis.bind("dragover.pat-sortable", function(event) {
+                    var $this = $(this),
+                        midlineY = $this.offset().top - $(document).scrollTop() +
+                            $this.height()/2;
+
+                    // bail if dropping on self
+                    if ($(this).hasClass("dragged"))
+                        return;
+
+                    $this.removeClass("drop-target-above drop-target-below");
+                    if (event.originalEvent.clientY > midlineY)
+                        $this.addClass("drop-target-below");
+                    else
+                        $this.addClass("drop-target-above");
+                    event.preventDefault();
+                });
+
+                $lis.bind("dragleave.pat-sortable", function() {
+                    $lis.removeClass("drop-target-above drop-target-below");
+                });
+
+                $lis.bind("drop.pat-sortable", function() {
+                    if ($(this).hasClass("drop-target-below"))
+                        $(this).after($(".dragged"));
+                    else
+                        $(this).before($(".dragged"));
+                    $(this).removeClass("drop-target-above drop-target-below");
+                    event.preventDefault();
+                });
+
+                scroll.appendTo("body");//.append(scrollup).append(scrolldn);
+            });
+
+            $handles.bind("dragend", function() {
+                $(".dragged").removeClass("dragged");
+                $lis.unbind(".pat-sortable");
+                $("#pat-scroll-up, #pat-scroll-dn").detach();
+            });
+
+            return $el;
         }
     };
 
-    patterns.register(sorting);
+    patterns.register(_);
+    return _;
 });
 
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
@@ -48887,10 +54259,10 @@ define('patterns/sorting',[
 define('patterns/switch',[
     "jquery",
     "../registry",
-    "../logging",
+    "../core/logger",
     "../core/parser"
-], function($, patterns, logging, Parser) {
-    var log = logging.getLogger("switch"),
+], function($, patterns, logger, Parser) {
+    var log = logger.getLogger("pat.switch"),
         parser = new Parser("switch");
     parser.add_argument("selector");
     parser.add_argument("remove");
@@ -48899,7 +54271,7 @@ define('patterns/switch',[
     var switcher = {
         name: "switch",
         trigger: ".pat-switch",
-        jquery_plugin: "patternSwitch",
+        jquery_plugin: true,
 
         init: function($el, defaults) {
             return $el.each(function() {
@@ -48926,7 +54298,7 @@ define('patterns/switch',[
             });
         },
 
-        _onClick: function(e) {
+        _onClick: function() {
             switcher._go($(this));
         },
 
@@ -48951,7 +54323,7 @@ define('patterns/switch',[
                 if (option.selector && (option.remove || option.add))
                     correct.push(option);
                 else
-                    log.error('Switch pattern requires selector and one of add or remove.');
+                    log.error("Switch pattern requires selector and one of add or remove.");
             }
             return correct.length ? correct : null;
         },
@@ -48963,7 +54335,7 @@ define('patterns/switch',[
                 return;
 
             if (remove) {
-                if (remove.indexOf('*')===-1) 
+                if (remove.indexOf("*")===-1)
                     $targets.removeClass(remove);
                 else {
                     remove = remove.replace(/[\-\[\]{}()+?.,\\\^$|#\s]/g, "\\$&");
@@ -49004,13 +54376,13 @@ define('patterns/switch',[
  * Copyright 2011 SYSLAB.COM GmbH
  */
 define('patterns/toggle',[
-    'jquery',
+    "jquery",
     "../registry",
-    '../logging',
+    "../core/logger",
     "../core/parser",
     "../core/store"
-], function($, patterns, logging, Parser, store) {
-    var log = logging.getLogger('toggle'),
+], function($, patterns, logger, Parser, store) {
+    var log = logger.getLogger("pat.toggle"),
         parser = new Parser("toggle");
 
     parser.add_argument("selector");
@@ -49027,7 +54399,7 @@ define('patterns/toggle',[
                 var $trigger = $(this),
                     options = toggle._validateOptions(this, parser.parse($trigger, true)),
                     state = {toggled: false, options: options},
-                    i, option;
+                    i, storage;
 
                 if (!options.length)
                     return;
@@ -49040,7 +54412,7 @@ define('patterns/toggle',[
 
                 if (state.toggled)
                     for (i=0; i<options.length; i++)
-                        toggle._update(options[i].selector, options[i].attr, options[i].value);
+                        toggle._update(options[i].selector, options[i].attr, options[i].value, true);
 
                 $trigger
                     .off(".toggle")
@@ -49101,12 +54473,12 @@ define('patterns/toggle',[
 
             for (i=0; i<state.options.length; i++) {
                 option=state.options[i];
-                toggle._update(option.selector, option.attr, option.value);
+                toggle._update(option.selector, option.attr, option.value, false);
             }
             event.preventDefault();
         },
 
-        _update: function(selector, attr, value) {
+        _update: function(selector, attr, value, reset) {
             var $targets = $(selector),
                 $target;
 
@@ -49118,10 +54490,16 @@ define('patterns/toggle',[
             } else {
                 for (var i=0; i<$targets.length; i++) {
                     $target=$targets.eq(i);
-                    if ($target.attr(attr)===attr) {
-                        $target.removeAttr(attr);
+                    if ($target.attr(attr)) {
+                        if (reset)
+                            $target.removeAttr(attr);
+                        else
+                            $target.prop(attr, false);
                     } else {
-                        $target.attr(attr, value);
+                        if (reset)
+                            $target.attr(attr, attr);
+                        else
+                            $target.prop(attr, true);
                     }
                 }
             }
@@ -49136,6 +54514,25 @@ define('patterns/toggle',[
 // vim: sw=4 expandtab
 ;
 /**
+ * Patterns remove - send event when objects are removed from the DOM
+ *
+ * Copyright 2012 Simplon B.V.
+ */
+define('core/remove',[
+    "jquery"
+], function($) {
+    var real_cleanData = $.cleanData;
+
+    $.cleanData = function(elems) {
+        var i, el;
+        for (i=0; (el=elems[i])!==undefined; i++)
+            $(el).triggerHandler("destroy");
+        real_cleanData.call(this, arguments);
+    };
+});
+
+
+/**
  * @license
  * Patterns @VERSION@ tooltip - tooltips
  *
@@ -49144,31 +54541,46 @@ define('patterns/toggle',[
  * Copyright 2011 SYSLAB.COM GmbH
  */
 define('patterns/tooltip',[
-    'jquery',
+    "jquery",
     "../registry",
-    '../utils',
-    './inject'
-], function($, patterns, utils, inject) {
+    "../core/parser",
+    "./inject",
+    "../core/remove"
+], function($, patterns, Parser, inject) {
+    var parser = new Parser("tooltip");
+
+    parser.add_argument("position");
+    parser.add_argument("click", false);
+    parser.add_argument("force", false);
+    parser.add_argument("sticky", false);
+    parser.add_argument("close", true);
+    parser.add_argument("ajax", false);
+    parser.add_argument("title", function($el) {
+        return $el.attr("title");
+    });
+
     var tooltip = {
         name: "tooltip",
-        trigger: "[data-tooltip]",
+        trigger: ".pat-tooltip",
 
         count: 0,
 
-        init: function($root) {
-            return $root.each(function() {
+        init: function($el, opts) {
+            return $el.each(function() {
                 var $trigger = $(this),
-                    options = utils.parseOptions($trigger.data("tooltip"));
-                options.title = $trigger.attr("title");
-                $trigger.removeAttr("title");
-                $trigger.data("patterns.tooltip", options);
+                    options = parser.parse($trigger, opts);
+                $trigger
+                    .removeAttr("title")
+                    .data("patterns.tooltip", options)
+                    .on("destroy", $trigger, tooltip.onDestroy);
                 tooltip.setupShowEvents($trigger);
+                $trigger.addClass("inactive");
             });
         },
 
         setupShowEvents: function($trigger) {
-            var parameters = $trigger.data("patterns.tooltip");
-            if (parameters.click) {
+            var options = $trigger.data("patterns.tooltip");
+            if (options.click) {
                 $trigger.on("click.tooltip", $trigger, tooltip.show);
             } else {
                 $trigger.on("mouseover.tooltip", $trigger, tooltip.show);
@@ -49183,23 +54595,23 @@ define('patterns/tooltip',[
 
         setupHideEvents: function($trigger) {
             var $container = tooltip.getContainer($trigger),
-                parameters = $trigger.data("patterns.tooltip");
-            if (parameters.sticky) {
+                options = $trigger.data("patterns.tooltip");
+            if (options.sticky) {
                 $container.find(".close-panel")
                     .on("click.tooltip", $trigger, tooltip.hide);
                 // Make sure click on the trigger element becomes a NOP
                 $trigger.on("click.tooltip", $trigger, tooltip.blockDefault);
             } else {
-                if (parameters.click) {
+                if (options.click) {
                     $container.on("click.tooltip", $trigger, function(ev) {
                         ev.stopPropagation();
                     });
                     $(document).on("click.tooltip", $trigger, tooltip.hide);
                     $trigger.on("click.tooltip", tooltip.blockDefault);
                     // close if something inside the tooltip triggered an injection
-                    $container.on('patterns-inject-triggered.tooltip',
+                    $container.on("patterns-inject-triggered.tooltip",
                                   $trigger, tooltip.hide);
-                    $container.on('submit.tooltip', $trigger, tooltip.hide);
+                    $container.on("submit.tooltip", $trigger, tooltip.hide);
                 } else {
                     $container.on("click.tooltip", $trigger, tooltip.hide);
                     $trigger.on("mouseleave.tooltip", $trigger, tooltip.hide);
@@ -49223,7 +54635,7 @@ define('patterns/tooltip',[
         show: function(event) {
             event.preventDefault();
             var $trigger = event.data,
-                $container = tooltip.getContainer($trigger),
+                $container = tooltip.getContainer($trigger, true),
                 namespace = $container.attr("id"),
                 options = $trigger.data("patterns.tooltip");
 
@@ -49232,22 +54644,14 @@ define('patterns/tooltip',[
             // trigger a hide as well.
             setTimeout(function() { tooltip.setupHideEvents($trigger); }, 50);
 
-            function ajax_show() {
-                $container.find(">div >*").css("opacity", 1);
-                tooltip.positionContainer($trigger, $container);
-            }
-
             if (options.ajax) {
                 var source = $trigger.attr("href").split("#"),
                     target_id = $container.find("progress").attr("id");
                 inject.execute([{
                     url: source[0],
-                    source: '#' + source[1],
-                    target: '#' + target_id + "::element"
-                }], $trigger);
-                // always load fresh tooltips
-                // delete options.ajax;
-                $trigger.data("patterns.tooltip", options);
+                    source: "#" + source[1],
+                    target: "#" + target_id + "::element"
+                }]);
             }
 
             tooltip.positionContainer($trigger, $container);
@@ -49257,6 +54661,8 @@ define('patterns/tooltip',[
             $(window).on("scroll." + namespace + " resize." + namespace, function () {
                  tooltip.positionContainer($trigger, $container);
             });
+
+            $trigger.removeClass("inactive").addClass("active");
         },
 
         hide: function(event) {
@@ -49267,14 +54673,27 @@ define('patterns/tooltip',[
             $container.css("visibility", "hidden");
             $(window).off("." + namespace);
             tooltip.setupShowEvents($trigger);
+            $trigger.removeClass("active").addClass("inactive");
         },
 
-        getContainer: function($trigger) {
+        onDestroy: function(event) {
+            var $trigger = event.data,
+                $container = $trigger.data("patterns.tooltip.container");
+            if ($container!==undefined)
+                $container.remove();
+        },
+
+        getContainer: function($trigger, create) {
             var $container = $trigger.data("patterns.tooltip.container");
-            if ($container===undefined) {
-                $container=tooltip.createContainer($trigger);
+
+            if (create) {
+                if ($container !== undefined) {
+                    $container.remove();
+                }
+                $container = tooltip.createContainer($trigger);
                 $trigger.data("patterns.tooltip.container", $container);
             }
+
             return $container;
         },
 
@@ -49283,6 +54702,7 @@ define('patterns/tooltip',[
                 count = ++tooltip.count,
                 $content, $container;
 
+            $trigger.data("patterns.tooltip.number", count);
             $container = $("<div/>", {"class": "tooltip-container",
                                      "id": "tooltip" + count});
             $container.css("visibility", "hidden");
@@ -49294,10 +54714,10 @@ define('patterns/tooltip',[
             $container.append(
                 $("<div/>").css("display", "block").append($content))
                 .append($("<span></span>", {"class": "pointer"}));
-            if (options.sticky && !options.noclose) {
+            if (options.sticky && options.close) {
                 $("<button/>", {"class": "close-panel"})
                     .text("Close")
-                    .insertBefore($container.find("*"));
+                    .insertBefore($container.find("*:first"));
             }
             $("body").append($container);
             return $container;
@@ -49320,10 +54740,7 @@ define('patterns/tooltip',[
                 window_height = $window.height(),
                 trigger_center,
                 scroll = {},
-                space = {},
-                container_offset = {},
-                tip_offset = {},
-                cls = "";
+                space = {};
 
             scroll.top = $window.scrollTop();
             scroll.left = $window.scrollLeft();
@@ -49478,7 +54895,7 @@ define('patterns/tooltip',[
                         continue;
                     }
 
-                    if (options.forcePosition || tooltip.isVisible(status, positions[i])) {
+                    if (options.force || tooltip.isVisible(status, positions[i])) {
                         position = positions[i];
                         break;
                     }
@@ -49493,7 +54910,6 @@ define('patterns/tooltip',[
                 tooltip_box = status.tooltip_box,
                 trigger_center = status.trigger_center,
                 content_css = {"max-height": "", "max-width": ""},
-                $window = $(window),
                 bottom_row, x;
 
             switch (position[0]) {
@@ -49581,30 +54997,1754 @@ define('patterns/tooltip',[
 // jshint indent: 4, browser: true, jquery: true, quotmark: double
 // vim: sw=4 expandtab
 ;
+/*! jQuery Validation Plugin - v1.10.0 - 9/7/2012
+* https://github.com/jzaefferer/jquery-validation
+* Copyright (c) 2012 Jörn Zaefferer; Licensed MIT, GPL */
+
+(function($) {
+
+$.extend($.fn, {
+	// http://docs.jquery.com/Plugins/Validation/validate
+	validate: function( options ) {
+
+		// if nothing is selected, return nothing; can't chain anyway
+		if (!this.length) {
+			if (options && options.debug && window.console) {
+				console.warn( "nothing selected, can't validate, returning nothing" );
+			}
+			return;
+		}
+
+		// check if a validator for this form was already created
+		var validator = $.data(this[0], 'validator');
+		if ( validator ) {
+			return validator;
+		}
+
+		// Add novalidate tag if HTML5.
+		this.attr('novalidate', 'novalidate');
+
+		validator = new $.validator( options, this[0] );
+		$.data(this[0], 'validator', validator);
+
+		if ( validator.settings.onsubmit ) {
+
+			this.validateDelegate( ":submit", "click", function(ev) {
+				if ( validator.settings.submitHandler ) {
+					validator.submitButton = ev.target;
+				}
+				// allow suppressing validation by adding a cancel class to the submit button
+				if ( $(ev.target).hasClass('cancel') ) {
+					validator.cancelSubmit = true;
+				}
+			});
+
+			// validate the form on submit
+			this.submit( function( event ) {
+				if ( validator.settings.debug ) {
+					// prevent form submit to be able to see console output
+					event.preventDefault();
+				}
+				function handle() {
+					var hidden;
+					if ( validator.settings.submitHandler ) {
+						if (validator.submitButton) {
+							// insert a hidden input as a replacement for the missing submit button
+							hidden = $("<input type='hidden'/>").attr("name", validator.submitButton.name).val(validator.submitButton.value).appendTo(validator.currentForm);
+						}
+						validator.settings.submitHandler.call( validator, validator.currentForm, event );
+						if (validator.submitButton) {
+							// and clean up afterwards; thanks to no-block-scope, hidden can be referenced
+							hidden.remove();
+						}
+						return false;
+					}
+					return true;
+				}
+
+				// prevent submit for invalid forms or custom submit handlers
+				if ( validator.cancelSubmit ) {
+					validator.cancelSubmit = false;
+					return handle();
+				}
+				if ( validator.form() ) {
+					if ( validator.pendingRequest ) {
+						validator.formSubmitted = true;
+						return false;
+					}
+					return handle();
+				} else {
+					validator.focusInvalid();
+					return false;
+				}
+			});
+		}
+
+		return validator;
+	},
+	// http://docs.jquery.com/Plugins/Validation/valid
+	valid: function() {
+		if ( $(this[0]).is('form')) {
+			return this.validate().form();
+		} else {
+			var valid = true;
+			var validator = $(this[0].form).validate();
+			this.each(function() {
+				valid &= validator.element(this);
+			});
+			return valid;
+		}
+	},
+	// attributes: space seperated list of attributes to retrieve and remove
+	removeAttrs: function(attributes) {
+		var result = {},
+			$element = this;
+		$.each(attributes.split(/\s/), function(index, value) {
+			result[value] = $element.attr(value);
+			$element.removeAttr(value);
+		});
+		return result;
+	},
+	// http://docs.jquery.com/Plugins/Validation/rules
+	rules: function(command, argument) {
+		var element = this[0];
+
+		if (command) {
+			var settings = $.data(element.form, 'validator').settings;
+			var staticRules = settings.rules;
+			var existingRules = $.validator.staticRules(element);
+			switch(command) {
+			case "add":
+				$.extend(existingRules, $.validator.normalizeRule(argument));
+				staticRules[element.name] = existingRules;
+				if (argument.messages) {
+					settings.messages[element.name] = $.extend( settings.messages[element.name], argument.messages );
+				}
+				break;
+			case "remove":
+				if (!argument) {
+					delete staticRules[element.name];
+					return existingRules;
+				}
+				var filtered = {};
+				$.each(argument.split(/\s/), function(index, method) {
+					filtered[method] = existingRules[method];
+					delete existingRules[method];
+				});
+				return filtered;
+			}
+		}
+
+		var data = $.validator.normalizeRules(
+		$.extend(
+			{},
+			$.validator.metadataRules(element),
+			$.validator.classRules(element),
+			$.validator.attributeRules(element),
+			$.validator.staticRules(element)
+		), element);
+
+		// make sure required is at front
+		if (data.required) {
+			var param = data.required;
+			delete data.required;
+			data = $.extend({required: param}, data);
+		}
+
+		return data;
+	}
+});
+
+// Custom selectors
+$.extend($.expr[":"], {
+	// http://docs.jquery.com/Plugins/Validation/blank
+	blank: function(a) {return !$.trim("" + a.value);},
+	// http://docs.jquery.com/Plugins/Validation/filled
+	filled: function(a) {return !!$.trim("" + a.value);},
+	// http://docs.jquery.com/Plugins/Validation/unchecked
+	unchecked: function(a) {return !a.checked;}
+});
+
+// constructor for validator
+$.validator = function( options, form ) {
+	this.settings = $.extend( true, {}, $.validator.defaults, options );
+	this.currentForm = form;
+	this.init();
+};
+
+$.validator.format = function(source, params) {
+	if ( arguments.length === 1 ) {
+		return function() {
+			var args = $.makeArray(arguments);
+			args.unshift(source);
+			return $.validator.format.apply( this, args );
+		};
+	}
+	if ( arguments.length > 2 && params.constructor !== Array  ) {
+		params = $.makeArray(arguments).slice(1);
+	}
+	if ( params.constructor !== Array ) {
+		params = [ params ];
+	}
+	$.each(params, function(i, n) {
+		source = source.replace(new RegExp("\\{" + i + "\\}", "g"), n);
+	});
+	return source;
+};
+
+$.extend($.validator, {
+
+	defaults: {
+		messages: {},
+		groups: {},
+		rules: {},
+		errorClass: "error",
+		validClass: "valid",
+		errorElement: "label",
+		focusInvalid: true,
+		errorContainer: $( [] ),
+		errorLabelContainer: $( [] ),
+		onsubmit: true,
+		ignore: ":hidden",
+		ignoreTitle: false,
+		onfocusin: function(element, event) {
+			this.lastActive = element;
+
+			// hide error label and remove error class on focus if enabled
+			if ( this.settings.focusCleanup && !this.blockFocusCleanup ) {
+				if ( this.settings.unhighlight ) {
+					this.settings.unhighlight.call( this, element, this.settings.errorClass, this.settings.validClass );
+				}
+				this.addWrapper(this.errorsFor(element)).hide();
+			}
+		},
+		onfocusout: function(element, event) {
+			if ( !this.checkable(element) && (element.name in this.submitted || !this.optional(element)) ) {
+				this.element(element);
+			}
+		},
+		onkeyup: function(element, event) {
+			if ( event.which === 9 && this.elementValue(element) === '' ) {
+				return;
+			} else if ( element.name in this.submitted || element === this.lastActive ) {
+				this.element(element);
+			}
+		},
+		onclick: function(element, event) {
+			// click on selects, radiobuttons and checkboxes
+			if ( element.name in this.submitted ) {
+				this.element(element);
+			}
+			// or option elements, check parent select in that case
+			else if (element.parentNode.name in this.submitted) {
+				this.element(element.parentNode);
+			}
+		},
+		highlight: function(element, errorClass, validClass) {
+			if (element.type === 'radio') {
+				this.findByName(element.name).addClass(errorClass).removeClass(validClass);
+			} else {
+				$(element).addClass(errorClass).removeClass(validClass);
+			}
+		},
+		unhighlight: function(element, errorClass, validClass) {
+			if (element.type === 'radio') {
+				this.findByName(element.name).removeClass(errorClass).addClass(validClass);
+			} else {
+				$(element).removeClass(errorClass).addClass(validClass);
+			}
+		}
+	},
+
+	// http://docs.jquery.com/Plugins/Validation/Validator/setDefaults
+	setDefaults: function(settings) {
+		$.extend( $.validator.defaults, settings );
+	},
+
+	messages: {
+		required: "This field is required.",
+		remote: "Please fix this field.",
+		email: "Please enter a valid email address.",
+		url: "Please enter a valid URL.",
+		date: "Please enter a valid date.",
+		dateISO: "Please enter a valid date (ISO).",
+		number: "Please enter a valid number.",
+		digits: "Please enter only digits.",
+		creditcard: "Please enter a valid credit card number.",
+		equalTo: "Please enter the same value again.",
+		maxlength: $.validator.format("Please enter no more than {0} characters."),
+		minlength: $.validator.format("Please enter at least {0} characters."),
+		rangelength: $.validator.format("Please enter a value between {0} and {1} characters long."),
+		range: $.validator.format("Please enter a value between {0} and {1}."),
+		max: $.validator.format("Please enter a value less than or equal to {0}."),
+		min: $.validator.format("Please enter a value greater than or equal to {0}.")
+	},
+
+	autoCreateRanges: false,
+
+	prototype: {
+
+		init: function() {
+			this.labelContainer = $(this.settings.errorLabelContainer);
+			this.errorContext = this.labelContainer.length && this.labelContainer || $(this.currentForm);
+			this.containers = $(this.settings.errorContainer).add( this.settings.errorLabelContainer );
+			this.submitted = {};
+			this.valueCache = {};
+			this.pendingRequest = 0;
+			this.pending = {};
+			this.invalid = {};
+			this.reset();
+
+			var groups = (this.groups = {});
+			$.each(this.settings.groups, function(key, value) {
+				$.each(value.split(/\s/), function(index, name) {
+					groups[name] = key;
+				});
+			});
+			var rules = this.settings.rules;
+			$.each(rules, function(key, value) {
+				rules[key] = $.validator.normalizeRule(value);
+			});
+
+			function delegate(event) {
+				var validator = $.data(this[0].form, "validator"),
+					eventType = "on" + event.type.replace(/^validate/, "");
+				if (validator.settings[eventType]) {
+					validator.settings[eventType].call(validator, this[0], event);
+				}
+			}
+			$(this.currentForm)
+				.validateDelegate(":text, [type='password'], [type='file'], select, textarea, " +
+					"[type='number'], [type='search'] ,[type='tel'], [type='url'], " +
+					"[type='email'], [type='datetime'], [type='date'], [type='month'], " +
+					"[type='week'], [type='time'], [type='datetime-local'], " +
+					"[type='range'], [type='color'] ",
+					"focusin focusout keyup", delegate)
+				.validateDelegate("[type='radio'], [type='checkbox'], select, option", "click", delegate);
+
+			if (this.settings.invalidHandler) {
+				$(this.currentForm).bind("invalid-form.validate", this.settings.invalidHandler);
+			}
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Validator/form
+		form: function() {
+			this.checkForm();
+			$.extend(this.submitted, this.errorMap);
+			this.invalid = $.extend({}, this.errorMap);
+			if (!this.valid()) {
+				$(this.currentForm).triggerHandler("invalid-form", [this]);
+			}
+			this.showErrors();
+			return this.valid();
+		},
+
+		checkForm: function() {
+			this.prepareForm();
+			for ( var i = 0, elements = (this.currentElements = this.elements()); elements[i]; i++ ) {
+				this.check( elements[i] );
+			}
+			return this.valid();
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Validator/element
+		element: function( element ) {
+			element = this.validationTargetFor( this.clean( element ) );
+			this.lastElement = element;
+			this.prepareElement( element );
+			this.currentElements = $(element);
+			var result = this.check( element ) !== false;
+			if (result) {
+				delete this.invalid[element.name];
+			} else {
+				this.invalid[element.name] = true;
+			}
+			if ( !this.numberOfInvalids() ) {
+				// Hide error containers on last error
+				this.toHide = this.toHide.add( this.containers );
+			}
+			this.showErrors();
+			return result;
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Validator/showErrors
+		showErrors: function(errors) {
+			if(errors) {
+				// add items to error list and map
+				$.extend( this.errorMap, errors );
+				this.errorList = [];
+				for ( var name in errors ) {
+					this.errorList.push({
+						message: errors[name],
+						element: this.findByName(name)[0]
+					});
+				}
+				// remove items from success list
+				this.successList = $.grep( this.successList, function(element) {
+					return !(element.name in errors);
+				});
+			}
+			if (this.settings.showErrors) {
+				this.settings.showErrors.call( this, this.errorMap, this.errorList );
+			} else {
+				this.defaultShowErrors();
+			}
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Validator/resetForm
+		resetForm: function() {
+			if ( $.fn.resetForm ) {
+				$( this.currentForm ).resetForm();
+			}
+			this.submitted = {};
+			this.lastElement = null;
+			this.prepareForm();
+			this.hideErrors();
+			this.elements().removeClass( this.settings.errorClass ).removeData( "previousValue" );
+		},
+
+		numberOfInvalids: function() {
+			return this.objectLength(this.invalid);
+		},
+
+		objectLength: function( obj ) {
+			var count = 0;
+			for ( var i in obj ) {
+				count++;
+			}
+			return count;
+		},
+
+		hideErrors: function() {
+			this.addWrapper( this.toHide ).hide();
+		},
+
+		valid: function() {
+			return this.size() === 0;
+		},
+
+		size: function() {
+			return this.errorList.length;
+		},
+
+		focusInvalid: function() {
+			if( this.settings.focusInvalid ) {
+				try {
+					$(this.findLastActive() || this.errorList.length && this.errorList[0].element || [])
+					.filter(":visible")
+					.focus()
+					// manually trigger focusin event; without it, focusin handler isn't called, findLastActive won't have anything to find
+					.trigger("focusin");
+				} catch(e) {
+					// ignore IE throwing errors when focusing hidden elements
+				}
+			}
+		},
+
+		findLastActive: function() {
+			var lastActive = this.lastActive;
+			return lastActive && $.grep(this.errorList, function(n) {
+				return n.element.name === lastActive.name;
+			}).length === 1 && lastActive;
+		},
+
+		elements: function() {
+			var validator = this,
+				rulesCache = {};
+
+			// select all valid inputs inside the form (no submit or reset buttons)
+			return $(this.currentForm)
+			.find("input, select, textarea")
+			.not(":submit, :reset, :image, [disabled]")
+			.not( this.settings.ignore )
+			.filter(function() {
+				if ( !this.name && validator.settings.debug && window.console ) {
+					console.error( "%o has no name assigned", this);
+				}
+
+				// select only the first element for each name, and only those with rules specified
+				if ( this.name in rulesCache || !validator.objectLength($(this).rules()) ) {
+					return false;
+				}
+
+				rulesCache[this.name] = true;
+				return true;
+			});
+		},
+
+		clean: function( selector ) {
+			return $( selector )[0];
+		},
+
+		errors: function() {
+			var errorClass = this.settings.errorClass.replace(' ', '.');
+			return $( this.settings.errorElement + "." + errorClass, this.errorContext );
+		},
+
+		reset: function() {
+			this.successList = [];
+			this.errorList = [];
+			this.errorMap = {};
+			this.toShow = $([]);
+			this.toHide = $([]);
+			this.currentElements = $([]);
+		},
+
+		prepareForm: function() {
+			this.reset();
+			this.toHide = this.errors().add( this.containers );
+		},
+
+		prepareElement: function( element ) {
+			this.reset();
+			this.toHide = this.errorsFor(element);
+		},
+
+		elementValue: function( element ) {
+			var type = $(element).attr('type'),
+				val = $(element).val();
+
+			if ( type === 'radio' || type === 'checkbox' ) {
+				return $('input[name="' + $(element).attr('name') + '"]:checked').val();
+			}
+
+			if ( typeof val === 'string' ) {
+				return val.replace(/\r/g, "");
+			}
+			return val;
+		},
+
+		check: function( element ) {
+			element = this.validationTargetFor( this.clean( element ) );
+
+			var rules = $(element).rules();
+			var dependencyMismatch = false;
+			var val = this.elementValue(element);
+			var result;
+
+			for (var method in rules ) {
+				var rule = { method: method, parameters: rules[method] };
+				try {
+
+					result = $.validator.methods[method].call( this, val, element, rule.parameters );
+
+					// if a method indicates that the field is optional and therefore valid,
+					// don't mark it as valid when there are no other rules
+					if ( result === "dependency-mismatch" ) {
+						dependencyMismatch = true;
+						continue;
+					}
+					dependencyMismatch = false;
+
+					if ( result === "pending" ) {
+						this.toHide = this.toHide.not( this.errorsFor(element) );
+						return;
+					}
+
+					if( !result ) {
+						this.formatAndAdd( element, rule );
+						return false;
+					}
+				} catch(e) {
+					if ( this.settings.debug && window.console ) {
+						console.log("exception occured when checking element " + element.id + ", check the '" + rule.method + "' method", e);
+					}
+					throw e;
+				}
+			}
+			if (dependencyMismatch) {
+				return;
+			}
+			if ( this.objectLength(rules) ) {
+				this.successList.push(element);
+			}
+			return true;
+		},
+
+		// return the custom message for the given element and validation method
+		// specified in the element's "messages" metadata
+		customMetaMessage: function(element, method) {
+			if (!$.metadata) {
+				return;
+			}
+			var meta = this.settings.meta ? $(element).metadata()[this.settings.meta] : $(element).metadata();
+			return meta && meta.messages && meta.messages[method];
+		},
+
+		// return the custom message for the given element and validation method
+		// specified in the element's HTML5 data attribute
+		customDataMessage: function(element, method) {
+			return $(element).data('msg-' + method.toLowerCase()) || (element.attributes && $(element).attr('data-msg-' + method.toLowerCase()));
+		},
+
+		// return the custom message for the given element name and validation method
+		customMessage: function( name, method ) {
+			var m = this.settings.messages[name];
+			return m && (m.constructor === String ? m : m[method]);
+		},
+
+		// return the first defined argument, allowing empty strings
+		findDefined: function() {
+			for(var i = 0; i < arguments.length; i++) {
+				if (arguments[i] !== undefined) {
+					return arguments[i];
+				}
+			}
+			return undefined;
+		},
+
+		defaultMessage: function( element, method) {
+			return this.findDefined(
+				this.customMessage( element.name, method ),
+				this.customDataMessage( element, method ),
+				this.customMetaMessage( element, method ),
+				// title is never undefined, so handle empty string as undefined
+				!this.settings.ignoreTitle && element.title || undefined,
+				$.validator.messages[method],
+				"<strong>Warning: No message defined for " + element.name + "</strong>"
+			);
+		},
+
+		formatAndAdd: function( element, rule ) {
+			var message = this.defaultMessage( element, rule.method ),
+				theregex = /\$?\{(\d+)\}/g;
+			if ( typeof message === "function" ) {
+				message = message.call(this, rule.parameters, element);
+			} else if (theregex.test(message)) {
+				message = $.validator.format(message.replace(theregex, '{$1}'), rule.parameters);
+			}
+			this.errorList.push({
+				message: message,
+				element: element
+			});
+
+			this.errorMap[element.name] = message;
+			this.submitted[element.name] = message;
+		},
+
+		addWrapper: function(toToggle) {
+			if ( this.settings.wrapper ) {
+				toToggle = toToggle.add( toToggle.parent( this.settings.wrapper ) );
+			}
+			return toToggle;
+		},
+
+		defaultShowErrors: function() {
+			var i, elements;
+			for ( i = 0; this.errorList[i]; i++ ) {
+				var error = this.errorList[i];
+				if ( this.settings.highlight ) {
+					this.settings.highlight.call( this, error.element, this.settings.errorClass, this.settings.validClass );
+				}
+				this.showLabel( error.element, error.message );
+			}
+			if( this.errorList.length ) {
+				this.toShow = this.toShow.add( this.containers );
+			}
+			if (this.settings.success) {
+				for ( i = 0; this.successList[i]; i++ ) {
+					this.showLabel( this.successList[i] );
+				}
+			}
+			if (this.settings.unhighlight) {
+				for ( i = 0, elements = this.validElements(); elements[i]; i++ ) {
+					this.settings.unhighlight.call( this, elements[i], this.settings.errorClass, this.settings.validClass );
+				}
+			}
+			this.toHide = this.toHide.not( this.toShow );
+			this.hideErrors();
+			this.addWrapper( this.toShow ).show();
+		},
+
+		validElements: function() {
+			return this.currentElements.not(this.invalidElements());
+		},
+
+		invalidElements: function() {
+			return $(this.errorList).map(function() {
+				return this.element;
+			});
+		},
+
+		showLabel: function(element, message) {
+			var label = this.errorsFor( element );
+			if ( label.length ) {
+				// refresh error/success class
+				label.removeClass( this.settings.validClass ).addClass( this.settings.errorClass );
+
+				// check if we have a generated label, replace the message then
+				if ( label.attr("generated") ) {
+					label.html(message);
+				}
+			} else {
+				// create label
+				label = $("<" + this.settings.errorElement + "/>")
+					.attr({"for":  this.idOrName(element), generated: true})
+					.addClass(this.settings.errorClass)
+					.html(message || "");
+				if ( this.settings.wrapper ) {
+					// make sure the element is visible, even in IE
+					// actually showing the wrapped element is handled elsewhere
+					label = label.hide().show().wrap("<" + this.settings.wrapper + "/>").parent();
+				}
+				if ( !this.labelContainer.append(label).length ) {
+					if ( this.settings.errorPlacement ) {
+						this.settings.errorPlacement(label, $(element) );
+					} else {
+					label.insertAfter(element);
+					}
+				}
+			}
+			if ( !message && this.settings.success ) {
+				label.text("");
+				if ( typeof this.settings.success === "string" ) {
+					label.addClass( this.settings.success );
+				} else {
+					this.settings.success( label, element );
+				}
+			}
+			this.toShow = this.toShow.add(label);
+		},
+
+		errorsFor: function(element) {
+			var name = this.idOrName(element);
+			return this.errors().filter(function() {
+				return $(this).attr('for') === name;
+			});
+		},
+
+		idOrName: function(element) {
+			return this.groups[element.name] || (this.checkable(element) ? element.name : element.id || element.name);
+		},
+
+		validationTargetFor: function(element) {
+			// if radio/checkbox, validate first element in group instead
+			if (this.checkable(element)) {
+				element = this.findByName( element.name ).not(this.settings.ignore)[0];
+			}
+			return element;
+		},
+
+		checkable: function( element ) {
+			return (/radio|checkbox/i).test(element.type);
+		},
+
+		findByName: function( name ) {
+			return $(this.currentForm).find('[name="' + name + '"]');
+		},
+
+		getLength: function(value, element) {
+			switch( element.nodeName.toLowerCase() ) {
+			case 'select':
+				return $("option:selected", element).length;
+			case 'input':
+				if( this.checkable( element) ) {
+					return this.findByName(element.name).filter(':checked').length;
+				}
+			}
+			return value.length;
+		},
+
+		depend: function(param, element) {
+			return this.dependTypes[typeof param] ? this.dependTypes[typeof param](param, element) : true;
+		},
+
+		dependTypes: {
+			"boolean": function(param, element) {
+				return param;
+			},
+			"string": function(param, element) {
+				return !!$(param, element.form).length;
+			},
+			"function": function(param, element) {
+				return param(element);
+			}
+		},
+
+		optional: function(element) {
+			var val = this.elementValue(element);
+			return !$.validator.methods.required.call(this, val, element) && "dependency-mismatch";
+		},
+
+		startRequest: function(element) {
+			if (!this.pending[element.name]) {
+				this.pendingRequest++;
+				this.pending[element.name] = true;
+			}
+		},
+
+		stopRequest: function(element, valid) {
+			this.pendingRequest--;
+			// sometimes synchronization fails, make sure pendingRequest is never < 0
+			if (this.pendingRequest < 0) {
+				this.pendingRequest = 0;
+			}
+			delete this.pending[element.name];
+			if ( valid && this.pendingRequest === 0 && this.formSubmitted && this.form() ) {
+				$(this.currentForm).submit();
+				this.formSubmitted = false;
+			} else if (!valid && this.pendingRequest === 0 && this.formSubmitted) {
+				$(this.currentForm).triggerHandler("invalid-form", [this]);
+				this.formSubmitted = false;
+			}
+		},
+
+		previousValue: function(element) {
+			return $.data(element, "previousValue") || $.data(element, "previousValue", {
+				old: null,
+				valid: true,
+				message: this.defaultMessage( element, "remote" )
+			});
+		}
+
+	},
+
+	classRuleSettings: {
+		required: {required: true},
+		email: {email: true},
+		url: {url: true},
+		date: {date: true},
+		dateISO: {dateISO: true},
+		number: {number: true},
+		digits: {digits: true},
+		creditcard: {creditcard: true}
+	},
+
+	addClassRules: function(className, rules) {
+		if ( className.constructor === String ) {
+			this.classRuleSettings[className] = rules;
+		} else {
+			$.extend(this.classRuleSettings, className);
+		}
+	},
+
+	classRules: function(element) {
+		var rules = {};
+		var classes = $(element).attr('class');
+		if ( classes ) {
+			$.each(classes.split(' '), function() {
+				if (this in $.validator.classRuleSettings) {
+					$.extend(rules, $.validator.classRuleSettings[this]);
+				}
+			});
+		}
+		return rules;
+	},
+
+	attributeRules: function(element) {
+		var rules = {};
+		var $element = $(element);
+
+		for (var method in $.validator.methods) {
+			var value;
+
+			// support for <input required> in both html5 and older browsers
+			if (method === 'required') {
+				value = $element.get(0).getAttribute(method);
+				// Some browsers return an empty string for the required attribute
+				// and non-HTML5 browsers might have required="" markup
+				if (value === "") {
+					value = true;
+				}
+				// force non-HTML5 browsers to return bool
+				value = !!value;
+			} else {
+				value = $element.attr(method);
+			}
+
+			if (value) {
+				rules[method] = value;
+			} else if ($element[0].getAttribute("type") === method) {
+				rules[method] = true;
+			}
+		}
+
+		// maxlength may be returned as -1, 2147483647 (IE) and 524288 (safari) for text inputs
+		if (rules.maxlength && /-1|2147483647|524288/.test(rules.maxlength)) {
+			delete rules.maxlength;
+		}
+
+		return rules;
+	},
+
+	metadataRules: function(element) {
+		if (!$.metadata) {
+			return {};
+		}
+
+		var meta = $.data(element.form, 'validator').settings.meta;
+		return meta ?
+			$(element).metadata()[meta] :
+			$(element).metadata();
+	},
+
+	staticRules: function(element) {
+		var rules = {};
+		var validator = $.data(element.form, 'validator');
+		if (validator.settings.rules) {
+			rules = $.validator.normalizeRule(validator.settings.rules[element.name]) || {};
+		}
+		return rules;
+	},
+
+	normalizeRules: function(rules, element) {
+		// handle dependency check
+		$.each(rules, function(prop, val) {
+			// ignore rule when param is explicitly false, eg. required:false
+			if (val === false) {
+				delete rules[prop];
+				return;
+			}
+			if (val.param || val.depends) {
+				var keepRule = true;
+				switch (typeof val.depends) {
+					case "string":
+						keepRule = !!$(val.depends, element.form).length;
+						break;
+					case "function":
+						keepRule = val.depends.call(element, element);
+						break;
+				}
+				if (keepRule) {
+					rules[prop] = val.param !== undefined ? val.param : true;
+				} else {
+					delete rules[prop];
+				}
+			}
+		});
+
+		// evaluate parameters
+		$.each(rules, function(rule, parameter) {
+			rules[rule] = $.isFunction(parameter) ? parameter(element) : parameter;
+		});
+
+		// clean number parameters
+		$.each(['minlength', 'maxlength', 'min', 'max'], function() {
+			if (rules[this]) {
+				rules[this] = Number(rules[this]);
+			}
+		});
+		$.each(['rangelength', 'range'], function() {
+			if (rules[this]) {
+				rules[this] = [Number(rules[this][0]), Number(rules[this][1])];
+			}
+		});
+
+		if ($.validator.autoCreateRanges) {
+			// auto-create ranges
+			if (rules.min && rules.max) {
+				rules.range = [rules.min, rules.max];
+				delete rules.min;
+				delete rules.max;
+			}
+			if (rules.minlength && rules.maxlength) {
+				rules.rangelength = [rules.minlength, rules.maxlength];
+				delete rules.minlength;
+				delete rules.maxlength;
+			}
+		}
+
+		// To support custom messages in metadata ignore rule methods titled "messages"
+		if (rules.messages) {
+			delete rules.messages;
+		}
+
+		return rules;
+	},
+
+	// Converts a simple string to a {string: true} rule, e.g., "required" to {required:true}
+	normalizeRule: function(data) {
+		if( typeof data === "string" ) {
+			var transformed = {};
+			$.each(data.split(/\s/), function() {
+				transformed[this] = true;
+			});
+			data = transformed;
+		}
+		return data;
+	},
+
+	// http://docs.jquery.com/Plugins/Validation/Validator/addMethod
+	addMethod: function(name, method, message) {
+		$.validator.methods[name] = method;
+		$.validator.messages[name] = message !== undefined ? message : $.validator.messages[name];
+		if (method.length < 3) {
+			$.validator.addClassRules(name, $.validator.normalizeRule(name));
+		}
+	},
+
+	methods: {
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/required
+		required: function(value, element, param) {
+			// check if dependency is met
+			if ( !this.depend(param, element) ) {
+				return "dependency-mismatch";
+			}
+			if ( element.nodeName.toLowerCase() === "select" ) {
+				// could be an array for select-multiple or a string, both are fine this way
+				var val = $(element).val();
+				return val && val.length > 0;
+			}
+			if ( this.checkable(element) ) {
+				return this.getLength(value, element) > 0;
+			}
+			return $.trim(value).length > 0;
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/remote
+		remote: function(value, element, param) {
+			if ( this.optional(element) ) {
+				return "dependency-mismatch";
+			}
+
+			var previous = this.previousValue(element);
+			if (!this.settings.messages[element.name] ) {
+				this.settings.messages[element.name] = {};
+			}
+			previous.originalMessage = this.settings.messages[element.name].remote;
+			this.settings.messages[element.name].remote = previous.message;
+
+			param = typeof param === "string" && {url:param} || param;
+
+			if ( this.pending[element.name] ) {
+				return "pending";
+			}
+			if ( previous.old === value ) {
+				return previous.valid;
+			}
+
+			previous.old = value;
+			var validator = this;
+			this.startRequest(element);
+			var data = {};
+			data[element.name] = value;
+			$.ajax($.extend(true, {
+				url: param,
+				mode: "abort",
+				port: "validate" + element.name,
+				dataType: "json",
+				data: data,
+				success: function(response) {
+					validator.settings.messages[element.name].remote = previous.originalMessage;
+					var valid = response === true || response === "true";
+					if ( valid ) {
+						var submitted = validator.formSubmitted;
+						validator.prepareElement(element);
+						validator.formSubmitted = submitted;
+						validator.successList.push(element);
+						delete validator.invalid[element.name];
+						validator.showErrors();
+					} else {
+						var errors = {};
+						var message = response || validator.defaultMessage( element, "remote" );
+						errors[element.name] = previous.message = $.isFunction(message) ? message(value) : message;
+						validator.invalid[element.name] = true;
+						validator.showErrors(errors);
+					}
+					previous.valid = valid;
+					validator.stopRequest(element, valid);
+				}
+			}, param));
+			return "pending";
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/minlength
+		minlength: function(value, element, param) {
+			var length = $.isArray( value ) ? value.length : this.getLength($.trim(value), element);
+			return this.optional(element) || length >= param;
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/maxlength
+		maxlength: function(value, element, param) {
+			var length = $.isArray( value ) ? value.length : this.getLength($.trim(value), element);
+			return this.optional(element) || length <= param;
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/rangelength
+		rangelength: function(value, element, param) {
+			var length = $.isArray( value ) ? value.length : this.getLength($.trim(value), element);
+			return this.optional(element) || ( length >= param[0] && length <= param[1] );
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/min
+		min: function( value, element, param ) {
+			return this.optional(element) || value >= param;
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/max
+		max: function( value, element, param ) {
+			return this.optional(element) || value <= param;
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/range
+		range: function( value, element, param ) {
+			return this.optional(element) || ( value >= param[0] && value <= param[1] );
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/email
+		email: function(value, element) {
+			// contributed by Scott Gonzalez: http://projects.scottsplayground.com/email_address_validation/
+			return this.optional(element) || /^((([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+(\.([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+)*)|((\x22)((((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(([\x01-\x08\x0b\x0c\x0e-\x1f\x7f]|\x21|[\x23-\x5b]|[\x5d-\x7e]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(\\([\x01-\x09\x0b\x0c\x0d-\x7f]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]))))*(((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(\x22)))@((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)+(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))$/i.test(value);
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/url
+		url: function(value, element) {
+			// contributed by Scott Gonzalez: http://projects.scottsplayground.com/iri/
+			return this.optional(element) || /^(https?|ftp):\/\/(((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:)*@)?(((\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5]))|((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)+(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.?)(:\d*)?)(\/((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)+(\/(([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)*)*)?)?(\?((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|[\uE000-\uF8FF]|\/|\?)*)?(\#((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|\/|\?)*)?$/i.test(value);
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/date
+		date: function(value, element) {
+			return this.optional(element) || !/Invalid|NaN/.test(new Date(value));
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/dateISO
+		dateISO: function(value, element) {
+			return this.optional(element) || /^\d{4}[\/\-]\d{1,2}[\/\-]\d{1,2}$/.test(value);
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/number
+		number: function(value, element) {
+			return this.optional(element) || /^-?(?:\d+|\d{1,3}(?:,\d{3})+)?(?:\.\d+)?$/.test(value);
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/digits
+		digits: function(value, element) {
+			return this.optional(element) || /^\d+$/.test(value);
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/creditcard
+		// based on http://en.wikipedia.org/wiki/Luhn
+		creditcard: function(value, element) {
+			if ( this.optional(element) ) {
+				return "dependency-mismatch";
+			}
+			// accept only spaces, digits and dashes
+			if (/[^0-9 \-]+/.test(value)) {
+				return false;
+			}
+			var nCheck = 0,
+				nDigit = 0,
+				bEven = false;
+
+			value = value.replace(/\D/g, "");
+
+			for (var n = value.length - 1; n >= 0; n--) {
+				var cDigit = value.charAt(n);
+				nDigit = parseInt(cDigit, 10);
+				if (bEven) {
+					if ((nDigit *= 2) > 9) {
+						nDigit -= 9;
+					}
+				}
+				nCheck += nDigit;
+				bEven = !bEven;
+			}
+
+			return (nCheck % 10) === 0;
+		},
+
+		// http://docs.jquery.com/Plugins/Validation/Methods/equalTo
+		equalTo: function(value, element, param) {
+			// bind to the blur event of the target in order to revalidate whenever the target field is updated
+			// TODO find a way to bind the event just once, avoiding the unbind-rebind overhead
+			var target = $(param);
+			if (this.settings.onfocusout) {
+				target.unbind(".validate-equalTo").bind("blur.validate-equalTo", function() {
+					$(element).valid();
+				});
+			}
+			return value === target.val();
+		}
+
+	}
+
+});
+
+// deprecated, use $.validator.format instead
+$.format = $.validator.format;
+
+}(jQuery));
+
+// ajax mode: abort
+// usage: $.ajax({ mode: "abort"[, port: "uniqueport"]});
+// if mode:"abort" is used, the previous request on that port (port can be undefined) is aborted via XMLHttpRequest.abort()
+(function($) {
+	var pendingRequests = {};
+	// Use a prefilter if available (1.5+)
+	if ( $.ajaxPrefilter ) {
+		$.ajaxPrefilter(function(settings, _, xhr) {
+			var port = settings.port;
+			if (settings.mode === "abort") {
+				if ( pendingRequests[port] ) {
+					pendingRequests[port].abort();
+				}
+				pendingRequests[port] = xhr;
+			}
+		});
+	} else {
+		// Proxy ajax
+		var ajax = $.ajax;
+		$.ajax = function(settings) {
+			var mode = ( "mode" in settings ? settings : $.ajaxSettings ).mode,
+				port = ( "port" in settings ? settings : $.ajaxSettings ).port;
+			if (mode === "abort") {
+				if ( pendingRequests[port] ) {
+					pendingRequests[port].abort();
+				}
+				return (pendingRequests[port] = ajax.apply(this, arguments));
+			}
+			return ajax.apply(this, arguments);
+		};
+	}
+}(jQuery));
+
+// provides cross-browser focusin and focusout events
+// IE has native support, in other browsers, use event caputuring (neither bubbles)
+
+// provides delegate(type: String, delegate: Selector, handler: Callback) plugin for easier event delegation
+// handler is only called when $(event.target).is(delegate), in the scope of the jquery-object for event.target
+(function($) {
+	// only implement if not provided by jQuery core (since 1.4)
+	// TODO verify if jQuery 1.4's implementation is compatible with older jQuery special-event APIs
+	if (!jQuery.event.special.focusin && !jQuery.event.special.focusout && document.addEventListener) {
+		$.each({
+			focus: 'focusin',
+			blur: 'focusout'
+		}, function( original, fix ){
+			$.event.special[fix] = {
+				setup:function() {
+					this.addEventListener( original, handler, true );
+				},
+				teardown:function() {
+					this.removeEventListener( original, handler, true );
+				},
+				handler: function(e) {
+					var args = arguments;
+					args[0] = $.event.fix(e);
+					args[0].type = fix;
+					return $.event.handle.apply(this, args);
+				}
+			};
+			function handler(e) {
+				e = $.event.fix(e);
+				e.type = fix;
+				return $.event.handle.call(this, e);
+			}
+		});
+	}
+	$.extend($.fn, {
+		validateDelegate: function(delegate, type, handler) {
+			return this.bind(type, function(event) {
+				var target = $(event.target);
+				if (target.is(delegate)) {
+					return handler.apply(target, arguments);
+				}
+			});
+		}
+	});
+}(jQuery));
+
+define("jquery_validate", ["jquery"], function(){});
+
+/*! jQuery Validation Plugin - v1.10.0 - 9/7/2012
+* https://github.com/jzaefferer/jquery-validation
+* Copyright (c) 2012 Jörn Zaefferer; Licensed MIT, GPL */
+
+/*!
+ * jQuery Validation Plugin 1.10.0
+ *
+ * http://bassistance.de/jquery-plugins/jquery-plugin-validation/
+ * http://docs.jquery.com/Plugins/Validation
+ *
+ * Copyright (c) 2006 - 2011 Jörn Zaefferer
+ *
+ * Dual licensed under the MIT and GPL licenses:
+ *   http://www.opensource.org/licenses/mit-license.php
+ *   http://www.gnu.org/licenses/gpl.html
+ */
+
+(function() {
+
+	function stripHtml(value) {
+		// remove html tags and space chars
+		return value.replace(/<.[^<>]*?>/g, ' ').replace(/&nbsp;|&#160;/gi, ' ')
+		// remove punctuation
+		.replace(/[.(),;:!?%#$'"_+=\/-]*/g,'');
+	}
+	jQuery.validator.addMethod("maxWords", function(value, element, params) {
+		return this.optional(element) || stripHtml(value).match(/\b\w+\b/g).length <= params;
+	}, jQuery.validator.format("Please enter {0} words or less."));
+
+	jQuery.validator.addMethod("minWords", function(value, element, params) {
+		return this.optional(element) || stripHtml(value).match(/\b\w+\b/g).length >= params;
+	}, jQuery.validator.format("Please enter at least {0} words."));
+
+	jQuery.validator.addMethod("rangeWords", function(value, element, params) {
+		var valueStripped = stripHtml(value);
+		var regex = /\b\w+\b/g;
+		return this.optional(element) || valueStripped.match(regex).length >= params[0] && valueStripped.match(regex).length <= params[1];
+	}, jQuery.validator.format("Please enter between {0} and {1} words."));
+
+})();
+
+jQuery.validator.addMethod("letterswithbasicpunc", function(value, element) {
+	return this.optional(element) || /^[a-z\-.,()'\"\s]+$/i.test(value);
+}, "Letters or punctuation only please");
+
+jQuery.validator.addMethod("alphanumeric", function(value, element) {
+	return this.optional(element) || /^\w+$/i.test(value);
+}, "Letters, numbers, and underscores only please");
+
+jQuery.validator.addMethod("lettersonly", function(value, element) {
+	return this.optional(element) || /^[a-z]+$/i.test(value);
+}, "Letters only please");
+
+jQuery.validator.addMethod("nowhitespace", function(value, element) {
+	return this.optional(element) || /^\S+$/i.test(value);
+}, "No white space please");
+
+jQuery.validator.addMethod("ziprange", function(value, element) {
+	return this.optional(element) || /^90[2-5]\d\{2\}-\d{4}$/.test(value);
+}, "Your ZIP-code must be in the range 902xx-xxxx to 905-xx-xxxx");
+
+jQuery.validator.addMethod("zipcodeUS", function(value, element) {
+	return this.optional(element) || /\d{5}-\d{4}$|^\d{5}$/.test(value)
+}, "The specified US ZIP Code is invalid");
+
+jQuery.validator.addMethod("integer", function(value, element) {
+	return this.optional(element) || /^-?\d+$/.test(value);
+}, "A positive or negative non-decimal number please");
+
+/**
+ * Return true, if the value is a valid vehicle identification number (VIN).
+ *
+ * Works with all kind of text inputs.
+ *
+ * @example <input type="text" size="20" name="VehicleID" class="{required:true,vinUS:true}" />
+ * @desc Declares a required input element whose value must be a valid vehicle identification number.
+ *
+ * @name jQuery.validator.methods.vinUS
+ * @type Boolean
+ * @cat Plugins/Validate/Methods
+ */
+jQuery.validator.addMethod("vinUS", function(v) {
+	if (v.length != 17) {
+		return false;
+	}
+	var i, n, d, f, cd, cdv;
+	var LL = ["A","B","C","D","E","F","G","H","J","K","L","M","N","P","R","S","T","U","V","W","X","Y","Z"];
+	var VL = [1,2,3,4,5,6,7,8,1,2,3,4,5,7,9,2,3,4,5,6,7,8,9];
+	var FL = [8,7,6,5,4,3,2,10,0,9,8,7,6,5,4,3,2];
+	var rs = 0;
+	for(i = 0; i < 17; i++){
+		f = FL[i];
+		d = v.slice(i,i+1);
+		if (i == 8) {
+			cdv = d;
+		}
+		if (!isNaN(d)) {
+			d *= f;
+		} else {
+			for (n = 0; n < LL.length; n++) {
+				if (d.toUpperCase() === LL[n]) {
+					d = VL[n];
+					d *= f;
+					if (isNaN(cdv) && n == 8) {
+						cdv = LL[n];
+					}
+					break;
+				}
+			}
+		}
+		rs += d;
+	}
+	cd = rs % 11;
+	if (cd == 10) {
+		cd = "X";
+	}
+	if (cd == cdv) {
+		return true;
+	}
+	return false;
+}, "The specified vehicle identification number (VIN) is invalid.");
+
+/**
+ * Return true, if the value is a valid date, also making this formal check dd/mm/yyyy.
+ *
+ * @example jQuery.validator.methods.date("01/01/1900")
+ * @result true
+ *
+ * @example jQuery.validator.methods.date("01/13/1990")
+ * @result false
+ *
+ * @example jQuery.validator.methods.date("01.01.1900")
+ * @result false
+ *
+ * @example <input name="pippo" class="{dateITA:true}" />
+ * @desc Declares an optional input element whose value must be a valid date.
+ *
+ * @name jQuery.validator.methods.dateITA
+ * @type Boolean
+ * @cat Plugins/Validate/Methods
+ */
+jQuery.validator.addMethod("dateITA", function(value, element) {
+	var check = false;
+	var re = /^\d{1,2}\/\d{1,2}\/\d{4}$/;
+	if( re.test(value)){
+		var adata = value.split('/');
+		var gg = parseInt(adata[0],10);
+		var mm = parseInt(adata[1],10);
+		var aaaa = parseInt(adata[2],10);
+		var xdata = new Date(aaaa,mm-1,gg);
+		if ( ( xdata.getFullYear() == aaaa ) && ( xdata.getMonth () == mm - 1 ) && ( xdata.getDate() == gg ) )
+			check = true;
+		else
+			check = false;
+	} else
+		check = false;
+	return this.optional(element) || check;
+}, "Please enter a correct date");
+
+jQuery.validator.addMethod("dateNL", function(value, element) {
+	return this.optional(element) || /^\d\d?[\.\/-]\d\d?[\.\/-]\d\d\d?\d?$/.test(value);
+}, "Vul hier een geldige datum in.");
+
+jQuery.validator.addMethod("time", function(value, element) {
+	return this.optional(element) || /^([0-1]\d|2[0-3]):([0-5]\d)$/.test(value);
+}, "Please enter a valid time, between 00:00 and 23:59");
+jQuery.validator.addMethod("time12h", function(value, element) {
+	return this.optional(element) || /^((0?[1-9]|1[012])(:[0-5]\d){0,2}(\ [AP]M))$/i.test(value);
+}, "Please enter a valid time, between 00:00 am and 12:00 pm");
+
+/**
+ * matches US phone number format
+ *
+ * where the area code may not start with 1 and the prefix may not start with 1
+ * allows '-' or ' ' as a separator and allows parens around area code
+ * some people may want to put a '1' in front of their number
+ *
+ * 1(212)-999-2345 or
+ * 212 999 2344 or
+ * 212-999-0983
+ *
+ * but not
+ * 111-123-5434
+ * and not
+ * 212 123 4567
+ */
+jQuery.validator.addMethod("phoneUS", function(phone_number, element) {
+	phone_number = phone_number.replace(/\s+/g, "");
+	return this.optional(element) || phone_number.length > 9 &&
+		phone_number.match(/^(\+?1-?)?(\([2-9]\d{2}\)|[2-9]\d{2})-?[2-9]\d{2}-?\d{4}$/);
+}, "Please specify a valid phone number");
+
+jQuery.validator.addMethod('phoneUK', function(phone_number, element) {
+	phone_number = phone_number.replace(/\(|\)|\s+|-/g,'');
+	return this.optional(element) || phone_number.length > 9 &&
+		phone_number.match(/^(?:(?:(?:00\s?|\+)44\s?)|(?:\(?0))(?:(?:\d{5}\)?\s?\d{4,5})|(?:\d{4}\)?\s?(?:\d{5}|\d{3}\s?\d{3}))|(?:\d{3}\)?\s?\d{3}\s?\d{3,4})|(?:\d{2}\)?\s?\d{4}\s?\d{4}))$/);
+}, 'Please specify a valid phone number');
+
+jQuery.validator.addMethod('mobileUK', function(phone_number, element) {
+	phone_number = phone_number.replace(/\s+|-/g,'');
+	return this.optional(element) || phone_number.length > 9 &&
+		phone_number.match(/^(?:(?:(?:00\s?|\+)44\s?|0)7(?:[45789]\d{2}|624)\s?\d{3}\s?\d{3})$/);
+}, 'Please specify a valid mobile number');
+
+//Matches UK landline + mobile, accepting only 01-3 for landline or 07 for mobile to exclude many premium numbers
+jQuery.validator.addMethod('phonesUK', function(phone_number, element) {
+	phone_number = phone_number.replace(/\s+|-/g,'');
+	return this.optional(element) || phone_number.length > 9 &&
+		phone_number.match(/^(?:(?:(?:00\s?|\+)44\s?|0)(?:1\d{8,9}|[23]\d{9}|7(?:[45789]\d{8}|624\d{6})))$/);
+}, 'Please specify a valid uk phone number');
+// On the above three UK functions, do the following server side processing:
+//  Compare with ^((?:00\s?|\+)(44)\s?)?\(?0?(?:\)\s?)?([1-9]\d{1,4}\)?[\d\s]+)
+//  Extract $2 and set $prefix to '+44<space>' if $2 is '44' otherwise set $prefix to '0'
+//  Extract $3 and remove spaces and parentheses. Phone number is combined $2 and $3.
+// A number of very detailed GB telephone number RegEx patterns can also be found at:
+// http://www.aa-asterisk.org.uk/index.php/Regular_Expressions_for_Validating_and_Formatting_UK_Telephone_Numbers
+
+//Matches UK postcode. based on http://snipplr.com/view/3152/postcode-validation/
+jQuery.validator.addMethod('postcodeUK', function(postcode, element) {
+	postcode = (postcode.toUpperCase()).replace(/\s+/g,'');
+	return this.optional(element) || postcode.match(/^([^QZ][^IJZ]{0,1}\d{1,2})(\d[^CIKMOV]{2})$/) || postcode.match(/^([^QV]\d[ABCDEFGHJKSTUW])(\d[^CIKMOV]{2})$/) || postcode.match(/^([^QV][^IJZ]\d[ABEHMNPRVWXY])(\d[^CIKMOV]{2})$/) || postcode.match(/^(GIR)(0AA)$/) || postcode.match(/^(BFPO)(\d{1,4})$/) || postcode.match(/^(BFPO)(C\/O\d{1,3})$/);
+}, 'Please specify a valid postcode');
+
+// TODO check if value starts with <, otherwise don't try stripping anything
+jQuery.validator.addMethod("strippedminlength", function(value, element, param) {
+	return jQuery(value).text().length >= param;
+}, jQuery.validator.format("Please enter at least {0} characters"));
+
+// same as email, but TLD is optional
+jQuery.validator.addMethod("email2", function(value, element, param) {
+	return this.optional(element) || /^((([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+(\.([a-z]|\d|[!#\$%&'\*\+\-\/=\?\^_`{\|}~]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])+)*)|((\x22)((((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(([\x01-\x08\x0b\x0c\x0e-\x1f\x7f]|\x21|[\x23-\x5b]|[\x5d-\x7e]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(\\([\x01-\x09\x0b\x0c\x0d-\x7f]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF]))))*(((\x20|\x09)*(\x0d\x0a))?(\x20|\x09)+)?(\x22)))@((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)*(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.?$/i.test(value);
+}, jQuery.validator.messages.email);
+
+// same as url, but TLD is optional
+jQuery.validator.addMethod("url2", function(value, element, param) {
+	return this.optional(element) || /^(https?|ftp):\/\/(((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:)*@)?(((\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5])\.(\d|[1-9]\d|1\d\d|2[0-4]\d|25[0-5]))|((([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|\d|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.)*(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])*([a-z]|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])))\.?)(:\d*)?)(\/((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)+(\/(([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)*)*)?)?(\?((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|[\uE000-\uF8FF]|\/|\?)*)?(\#((([a-z]|\d|-|\.|_|~|[\u00A0-\uD7FF\uF900-\uFDCF\uFDF0-\uFFEF])|(%[\da-f]{2})|[!\$&'\(\)\*\+,;=]|:|@)|\/|\?)*)?$/i.test(value);
+}, jQuery.validator.messages.url);
+
+// NOTICE: Modified version of Castle.Components.Validator.CreditCardValidator
+// Redistributed under the the Apache License 2.0 at http://www.apache.org/licenses/LICENSE-2.0
+// Valid Types: mastercard, visa, amex, dinersclub, enroute, discover, jcb, unknown, all (overrides all other settings)
+jQuery.validator.addMethod("creditcardtypes", function(value, element, param) {
+	if (/[^0-9-]+/.test(value)) {
+		return false;
+	}
+
+	value = value.replace(/\D/g, "");
+
+	var validTypes = 0x0000;
+
+	if (param.mastercard)
+		validTypes |= 0x0001;
+	if (param.visa)
+		validTypes |= 0x0002;
+	if (param.amex)
+		validTypes |= 0x0004;
+	if (param.dinersclub)
+		validTypes |= 0x0008;
+	if (param.enroute)
+		validTypes |= 0x0010;
+	if (param.discover)
+		validTypes |= 0x0020;
+	if (param.jcb)
+		validTypes |= 0x0040;
+	if (param.unknown)
+		validTypes |= 0x0080;
+	if (param.all)
+		validTypes = 0x0001 | 0x0002 | 0x0004 | 0x0008 | 0x0010 | 0x0020 | 0x0040 | 0x0080;
+
+	if (validTypes & 0x0001 && /^(5[12345])/.test(value)) { //mastercard
+		return value.length == 16;
+	}
+	if (validTypes & 0x0002 && /^(4)/.test(value)) { //visa
+		return value.length == 16;
+	}
+	if (validTypes & 0x0004 && /^(3[47])/.test(value)) { //amex
+		return value.length == 15;
+	}
+	if (validTypes & 0x0008 && /^(3(0[012345]|[68]))/.test(value)) { //dinersclub
+		return value.length == 14;
+	}
+	if (validTypes & 0x0010 && /^(2(014|149))/.test(value)) { //enroute
+		return value.length == 15;
+	}
+	if (validTypes & 0x0020 && /^(6011)/.test(value)) { //discover
+		return value.length == 16;
+	}
+	if (validTypes & 0x0040 && /^(3)/.test(value)) { //jcb
+		return value.length == 16;
+	}
+	if (validTypes & 0x0040 && /^(2131|1800)/.test(value)) { //jcb
+		return value.length == 15;
+	}
+	if (validTypes & 0x0080) { //unknown
+		return true;
+	}
+	return false;
+}, "Please enter a valid credit card number.");
+
+jQuery.validator.addMethod("ipv4", function(value, element, param) {
+		return this.optional(element) || /^(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)\.(25[0-5]|2[0-4]\d|[01]?\d\d?)$/i.test(value);
+}, "Please enter a valid IP v4 address.");
+
+jQuery.validator.addMethod("ipv6", function(value, element, param) {
+		return this.optional(element) || /^((([0-9A-Fa-f]{1,4}:){7}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){6}:[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){5}:([0-9A-Fa-f]{1,4}:)?[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){4}:([0-9A-Fa-f]{1,4}:){0,2}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){3}:([0-9A-Fa-f]{1,4}:){0,3}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){2}:([0-9A-Fa-f]{1,4}:){0,4}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){6}((\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b)\.){3}(\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b))|(([0-9A-Fa-f]{1,4}:){0,5}:((\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b)\.){3}(\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b))|(::([0-9A-Fa-f]{1,4}:){0,5}((\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b)\.){3}(\b((25[0-5])|(1\d{2})|(2[0-4]\d)|(\d{1,2}))\b))|([0-9A-Fa-f]{1,4}::([0-9A-Fa-f]{1,4}:){0,5}[0-9A-Fa-f]{1,4})|(::([0-9A-Fa-f]{1,4}:){0,6}[0-9A-Fa-f]{1,4})|(([0-9A-Fa-f]{1,4}:){1,7}:))$/i.test(value);
+}, "Please enter a valid IP v6 address.");
+
+/**
+* Return true if the field value matches the given format RegExp
+*
+* @example jQuery.validator.methods.pattern("AR1004",element,/^AR\d{4}$/)
+* @result true
+*
+* @example jQuery.validator.methods.pattern("BR1004",element,/^AR\d{4}$/)
+* @result false
+*
+* @name jQuery.validator.methods.pattern
+* @type Boolean
+* @cat Plugins/Validate/Methods
+*/
+jQuery.validator.addMethod("pattern", function(value, element, param) {
+	if (this.optional(element)) {
+		return true;
+	}
+	if (typeof param === 'string') {
+		param = new RegExp('^(?:' + param + ')$');
+	}
+	return param.test(value);
+}, "Invalid format.");
+
+
+/*
+ * Lets you say "at least X inputs that match selector Y must be filled."
+ *
+ * The end result is that neither of these inputs:
+ *
+ *  <input class="productinfo" name="partnumber">
+ *  <input class="productinfo" name="description">
+ *
+ *  ...will validate unless at least one of them is filled.
+ *
+ * partnumber:  {require_from_group: [1,".productinfo"]},
+ * description: {require_from_group: [1,".productinfo"]}
+ *
+ */
+jQuery.validator.addMethod("require_from_group", function(value, element, options) {
+	var validator = this;
+	var selector = options[1];
+	var validOrNot = $(selector, element.form).filter(function() {
+		return validator.elementValue(this);
+	}).length >= options[0];
+
+	if(!$(element).data('being_validated')) {
+		var fields = $(selector, element.form);
+		fields.data('being_validated', true);
+		fields.valid();
+		fields.data('being_validated', false);
+	}
+	return validOrNot;
+}, jQuery.format("Please fill at least {0} of these fields."));
+
+/*
+ * Lets you say "either at least X inputs that match selector Y must be filled,
+ * OR they must all be skipped (left blank)."
+ *
+ * The end result, is that none of these inputs:
+ *
+ *  <input class="productinfo" name="partnumber">
+ *  <input class="productinfo" name="description">
+ *  <input class="productinfo" name="color">
+ *
+ *  ...will validate unless either at least two of them are filled,
+ *  OR none of them are.
+ *
+ * partnumber:  {skip_or_fill_minimum: [2,".productinfo"]},
+ *  description: {skip_or_fill_minimum: [2,".productinfo"]},
+ * color:       {skip_or_fill_minimum: [2,".productinfo"]}
+ *
+ */
+jQuery.validator.addMethod("skip_or_fill_minimum", function(value, element, options) {
+	var validator = this;
+
+	numberRequired = options[0];
+	selector = options[1];
+	var numberFilled = $(selector, element.form).filter(function() {
+		return validator.elementValue(this);
+	}).length;
+	var valid = numberFilled >= numberRequired || numberFilled === 0;
+
+	if(!$(element).data('being_validated')) {
+		var fields = $(selector, element.form);
+		fields.data('being_validated', true);
+		fields.valid();
+		fields.data('being_validated', false);
+	}
+	return valid;
+}, jQuery.format("Please either skip these fields or fill at least {0} of them."));
+
+// Accept a value from a file input based on a required mimetype
+jQuery.validator.addMethod("accept", function(value, element, param) {
+	// Split mime on commas incase we have multiple types we can accept
+	var typeParam = typeof param === "string" ? param.replace(/,/g, '|') : "image/*",
+	optionalValue = this.optional(element),
+	i, file;
+
+	// Element is optional
+	if(optionalValue) {
+		return optionalValue;
+	}
+
+	if($(element).attr("type") === "file") {
+		// If we are using a wildcard, make it regex friendly
+		typeParam = typeParam.replace("*", ".*");
+
+		// Check if the element has a FileList before checking each file
+		if(element.files && element.files.length) {
+			for(i = 0; i < element.files.length; i++) {
+				file = element.files[i];
+
+				// Grab the mimtype from the loaded file, verify it matches
+				if(!file.type.match(new RegExp( ".?(" + typeParam + ")$", "i"))) {
+					return false;
+				}
+			}
+		}
+	}
+
+	// Either return true because we've validated each file, or because the
+	// browser does not support element.files and the FileList feature
+	return true;
+}, jQuery.format("Please enter a value with a valid mimetype."));
+
+// Older "accept" file extension method. Old docs: http://docs.jquery.com/Plugins/Validation/Methods/accept
+jQuery.validator.addMethod("extension", function(value, element, param) {
+	param = typeof param === "string" ? param.replace(/,/g, '|') : "png|jpe?g|gif";
+	return this.optional(element) || value.match(new RegExp(".(" + param + ")$", "i"));
+}, jQuery.format("Please enter a value with a valid extension."));
+
+define("jquery_validate_additional_methods", ["jquery_validate"], function(){});
+
 define('patterns/validate',[
     "jquery",
     "../registry",
-    '../logging',
-    "jquery_validate"
-], function($, patterns, logging) {
-    var log = logging.getLogger('validate');
+    "../core/logger",
+    "jquery_validate",
+    "jquery_validate_additional_methods"
+], function($, patterns, logger) {
+    var log = logger.getLogger("pat.validate");
 
     var pattern_spec = {
         name: "validate",
         trigger: "form.validate",
 
         init: function($el) {
-            var rules = $el.find('[data-required-if]').toArray().reduce(function(acc, el) {
+            $el.find("[data-validator]").toArray().reduce(function(acc, el) {
+                /*
+                Support for custom validator:
+                -----------------------------
+                The data-* attributes are:
+                - data-validator (classname, method)
+                - data-validator-message  (message)
+
+                Parameters:
+                    *classname* is a string which must be set as a class on the element to validate.
+                    *method* is a string denoting the name of the validating function.
+                        If it's a nested/namespaced method, you can provide dot notation.
+                    *message* is the error message which will be returned if validation fails.
+                */
+                var i, path_to_func, $el = $(el),
+                    varray = $el.data("validator").split(" ", 2),
+                    message = $el.data("validator-message");
+
+                // The function might be namespaced (e.g namespace.subnamespace.myfunc)
+                // We therefore need to split on "." and traverse the path.
+                path_to_func = varray[1].split(".");
+                var func = window[path_to_func[0]];
+                for (i=1; i<path_to_func.length; i++) {
+                    try {
+                        func = func[path_to_func[i]];
+                    } catch(e) {
+                        log.error("Could not find the validator function: " + varray[1]);
+                    }
+                }
+                $.validator.addMethod(varray[0], func, message);
+            }, {});
+
+            var rules = $el.find("[data-required-if]").toArray().reduce(function(acc, el) {
                 var $el = $(el),
-                    id = $el.attr('id');
+                    id = $el.attr("id");
                 if (!id) {
-                    log.error('Element needs id, skipping:', $el);
+                    log.error("Element needs id, skipping:", $el);
                     return acc;
                 }
-                acc[id] = {required: $el.data('required-if')};
+                acc[id] = {required: $el.data("required-if")};
                 return acc;
             }, {});
-            log.debug('rules:', rules);
+            log.debug("rules:", rules);
 
             // ATTENTION: adding the debug option to validate, disables
             // form submission
@@ -49661,18 +56801,23 @@ define('patterns/zoom',[
 ;
 requirejs.config({
     paths: {
-        URI: "./3rdparty/URI",
+        URIjs: "./3rdparty/URIjs/src",
         jquery: "./3rdparty/jquery-1.8.2",
         jquery_anythingslider: "./3rdparty/jquery.anythingslider",
         jquery_autosuggest: "./3rdparty/jquery.autoSuggest",
         jquery_chosen: "./3rdparty/chosen.jquery",
         jquery_ext: "./jquery-ext",
-        jquery_form: "./3rdparty/jquery.form/jquery.form",
+        jquery_form: "./lib/jquery.form/jquery.form",
         jquery_fullcalendar: "./3rdparty/fullcalendar/fullcalendar",
+        jquery_jcrop: "./3rdparty/jCrop/js/jquery.Jcrop",
         jquery_placeholder: "./3rdparty/jquery.placeholder",
+        jquery_textchange: "./3rdparty/jquery.textchange/jquery.textchange",
         jquery_validate: "./3rdparty/jquery-validation/jquery.validate",
         jquery_validate_additional_methods: "./3rdparty/jquery-validation/additional-methods",
-        log4javascript: "./3rdparty/log4javascript/log4javascript_uncompressed",
+        logging: "./3rdparty/logging/src/logging",
+        less: "./3rdparty/less-1.3.1",
+        pagedown_converter: "./3rdparty/pagedown/Markdown.Converter",
+        pagedown_sanitizer: "./3rdparty/pagedown/Markdown.Sanitizer",
         modernizr: "./3rdparty/modernizr-2.0.6",
         prefixfree: "./3rdparty/prefixfree",
         tinymce: "./3rdparty/tiny_mce/tiny_mce_src"
@@ -49687,16 +56832,19 @@ requirejs.config({
         jquery_chosen: {
             deps: ["jquery"]
         },
-        jquery_ext: {
-            deps: ["jquery"]
-        },
         jquery_form: {
             deps: ["jquery"]
         },
         jquery_fullcalendar: {
             deps: ["jquery"]
         },
+        jquery_jcrop: {
+            deps: ["jquery"]
+        },
         jquery_placeholder: {
+            deps: ["jquery"]
+        },
+        jquery_textchange: {
             deps: ["jquery"]
         },
         jquery_validate: {
@@ -49704,44 +56852,51 @@ requirejs.config({
         },
         jquery_validate_additional_methods: {
             deps: ["jquery_validate"]
+        },
+        pagedown_sanitizer: {
+            deps: ["pagedown_converter"]
         }
     }
 });
 
 define('main',[
-    'jquery',
-    './registry',
+    "jquery",
+    "./registry",
     // below here modules that are only loaded
-    "jquery_validate_additional_methods",
-    'modernizr',
-    'prefixfree',
-    './patterns/autofocus',
-    './patterns/autosubmit',
-    './patterns/autosubmit2',
-    './patterns/autosuggest',
-    './patterns/breadcrumbs',
-    './patterns/carousel',
-    './patterns/checkedflag',
-    './patterns/checklist',
-    './patterns/chosen',
-    './patterns/collapsible',
-    './patterns/depends',
-    './patterns/edit-tinymce',
-    './patterns/expandable',
-    './patterns/focus',
-    './patterns/fullcalendar',
-    './patterns/inject',
-    './patterns/menu',
-    './patterns/modal',
-    './patterns/navigation',
-    './patterns/placeholder',
-    './patterns/setclass',
-    './patterns/sorting',
-    './patterns/switch',
-    './patterns/toggle',
-    './patterns/tooltip',
-    './patterns/validate',
-    './patterns/zoom'
+    "modernizr",
+    "less",
+    "prefixfree",
+    "./patterns/autofocus",
+    "./patterns/autoscale",
+    "./patterns/autosubmit",
+    "./patterns/autosuggest",
+    "./patterns/breadcrumbs",
+    "./patterns/bumper",
+    "./patterns/carousel",
+    "./patterns/checkedflag",
+    "./patterns/checklist",
+    "./patterns/chosen",
+    "./patterns/collapsible",
+    "./patterns/depends",
+    "./patterns/edit-tinymce",
+    "./patterns/expandable",
+    "./patterns/focus",
+    "./patterns/form-state",
+    "./patterns/fullcalendar",
+    "./patterns/image-crop",
+    "./patterns/inject",
+    "./patterns/markdown",
+    "./patterns/menu",
+    "./patterns/modal",
+    "./patterns/navigation",
+    "./patterns/placeholder",
+    "./patterns/setclass",
+    "./patterns/sortable",
+    "./patterns/switch",
+    "./patterns/toggle",
+    "./patterns/tooltip",
+    "./patterns/validate",
+    "./patterns/zoom"
 ], function($, registry) {
     // wait for the DOM to be ready and initialize
     $(document).ready(function(){
