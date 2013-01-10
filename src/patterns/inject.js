@@ -235,7 +235,10 @@ define([
                             $src = $source.clone(),
                             $injected = cfg.$injected || $src;
                         if (_._inject($src, $target, cfg.action, cfg["class"])) {
-                            $injected.data('pat-injected', {origin: cfg.url});
+                            $injected.filter(function() {
+                                // setting data on textnode fails in IE8 
+                                return this.nodeType !== 3; //Node.TEXT_NODE
+                            }).data('pat-injected', {origin: cfg.url});
                             $injected.addClass(cfg["class"])
                                 .trigger('patterns-injected', cfg);
                         }
@@ -309,31 +312,47 @@ define([
         _link_attributes: {
             A: "href",
             FORM: "action",
-            IMG: "img"
+            IMG: "src"
         },
 
         _parseRawHtml: function(html, url) {
             url = url || "";
-            var $html;
-            $html = $('<div/>').html(
-                // remove script tags and head and replace body by a div
-                html.replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
+
+            // remove script tags and head and replace body by a div
+            var clean_html = html
+                    .replace(/<script\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/script>/gi, "")
                     .replace(/<head\b[^<]*(?:(?!<\/script>)<[^<]*)*<\/head>/gi, "")
-                    .replace(/<body(.*)>/gi, '<div id="__original_body">')
-                    .replace(/<\/body(.*)>/gi,'</div>')
-            );
-            // this.(href|action|src) yields absolute uri -> retrieve relative
-            // uris with getAttribute
+                    .replace(/<body(.*?)>/gi, '<div id="__original_body">')
+                    .replace(/<\/body(.*?)>/gi,'</div>');
+            var $html = $('<div/>').html(clean_html);
+
+            if ($html.children().length === 0)
+                log.warn("Parsing html resulted in empty jquery object:", clean_html);
+
+            // make relative links in _link_attributes relative to current page
             $html.find(":uri(is:relative)").each(function() {
                 var attr = _._link_attributes[this.tagName],
-                    rel_url;
-                if (!attr)
+                    rel_url, new_rel_url;
+                if (!attr) {
                     return;
-                rel_url=this.getAttribute(attr);
-                if (!rel_url || rel_url[0]==="#")
+                }
+
+                // this.(href|action|src) yields absolute uri -> retrieve relative
+                // uris with getAttribute
+                rel_url = this.getAttribute(attr);
+                if (!rel_url) {
+                    log.info("Skipping empty url for (el, attr)", this, attr);
                     return;
-                rel_url=new URI(rel_url).absoluteTo(url).toString();
-                this[attr]=rel_url;
+                }
+                // leave hash and plone views untouched
+                if ((rel_url[0] === "#") || (rel_url[0] === "@")) {
+                    return;
+                }
+                new_rel_url = new URI(rel_url).absoluteTo(url).toString();
+                if (new_rel_url !== rel_url) {
+                    log.debug('Adjusted url from:', rel_url, 'to:', new_rel_url);
+                    this[attr] = new_rel_url;
+                }
             });
             return $html;
         },

@@ -1,3 +1,4 @@
+// This could become a jquery.form replacement or start using jquery.form
 define([
     "jquery",
     "../core/logger"
@@ -13,7 +14,7 @@ define([
             context: $el,
             url: opts.url || undefined,
             error: function(jqxhr, status, error) {
-                // error can als stem from a javascript exception, not
+                // error can also stem from a javascript exception, not
                 // only errors described in the jqxhr
                 log.error("load error for " + opts.url + ":", error, jqxhr);
                 $el.trigger({

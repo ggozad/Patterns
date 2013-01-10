@@ -36,6 +36,9 @@ requirejs.config({
         jquery_placeholder: {
             deps: ["jquery"]
         },
+        jquery_textchange: {
+            deps: ["jquery"]
+        },
         jquery_validate: {
             deps: ["jquery"]
         },
@@ -75,7 +78,7 @@ define([
     './patterns/navigation',
     './patterns/placeholder',
     './patterns/setclass',
-    './patterns/sorting',
+    './patterns/sortable',
     './patterns/switch',
     './patterns/toggle',
     './patterns/tooltip',

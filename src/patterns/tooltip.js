@@ -87,7 +87,7 @@ define([
         show: function(event) {
             event.preventDefault();
             var $trigger = event.data,
-                $container = tooltip.getContainer($trigger),
+                $container = tooltip.getContainer($trigger, true),
                 namespace = $container.attr("id"),
                 options = $trigger.data("patterns.tooltip");
 
@@ -110,8 +110,8 @@ define([
                     target: '#' + target_id + "::element"
                 }], $trigger);
                 // always load fresh tooltips
-                // delete options.ajax;
-                $trigger.data("patterns.tooltip", options);
+                //delete options.ajax;
+                //$trigger.data("patterns.tooltip", options);
             }
 
             tooltip.positionContainer($trigger, $container);
@@ -136,12 +136,18 @@ define([
             $trigger.removeClass("active").addClass("inactive");
         },
 
-        getContainer: function($trigger) {
-            var $container = $trigger.data("patterns.tooltip.container");
-            if ($container===undefined) {
-                $container=tooltip.createContainer($trigger);
+        getContainer: function($trigger, create) {
+            var options = $trigger.data("patterns.tooltip"),
+                $container = $trigger.data("patterns.tooltip.container");
+
+            if (create) {
+                if ($container !== undefined) {
+                    $container.remove();
+                }
+                $container = tooltip.createContainer($trigger);
                 $trigger.data("patterns.tooltip.container", $container);
             }
+
             return $container;
         },
 
@@ -150,6 +156,7 @@ define([
                 count = ++tooltip.count,
                 $content, $container;
 
+            $trigger.data('patterns.tooltip.number', count);
             $container = $("<div/>", {"class": "tooltip-container",
                                      "id": "tooltip" + count});
             $container.css("visibility", "hidden");
