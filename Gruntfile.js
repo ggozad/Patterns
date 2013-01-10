@@ -150,9 +150,9 @@ module.exports = function(grunt) {
     });
 
     grunt.registerMultiTask('symlink', 'Create symlinks.', function() {
+        var fs = require('fs');
         this.files.forEach(function(f) {
-            var fs = require('fs'),
-                dest = f.dest,
+            var dest = f.dest,
                 src = f.src;
             try {
                 if (fs.existsSync(dest)) {
