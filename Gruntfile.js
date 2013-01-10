@@ -126,12 +126,20 @@ module.exports = function(grunt) {
         },
         symlink : {
             bundles: {
-                files : {
-                    'bundles/patterns-standalone.js'       : 'patterns-standalone-<%= meta.fingerprint %>.js',
-                    'bundles/patterns-standalone.min.js'   : 'patterns-standalone-<%= meta.fingerprint %>.min.js',
-                    'bundles/patterns.js'                  : 'patterns-<%= meta.fingerprint %>.js',
-                    'bundles/patterns.min.js'              : 'patterns-<%= meta.fingerprint %>.min.js'
-                }
+                files : [
+                    { dest: 'bundles/patterns-standalone.js',
+                      src: 'bundles/patterns-standalone-<%= meta.fingerprint %>.js',
+                      nonull: false},
+                    { dest: 'bundles/patterns-standalone.min.js',
+                      src: 'bundles/patterns-standalone-<%= meta.fingerprint %>.min.js',
+                      nonull: false},
+                    { dest: 'bundles/patterns.js',
+                      src: 'bundles/patterns-<%= meta.fingerprint %>.js',
+                      nonull: false},
+                    { dest: 'bundles/patterns.min.js',
+                      src: 'bundles/patterns-<%= meta.fingerprint %>.min.js',
+                      nonull: false}
+                ]
             }
         }
         // sass : {
