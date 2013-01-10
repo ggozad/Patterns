@@ -1,3 +1,4 @@
+/*jshint newcap:false */
 define(function() {
 
     // https://developer.mozilla.org/en/JavaScript/Reference/Global_Objects/Array/every (JS 1.6)

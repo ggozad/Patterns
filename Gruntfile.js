@@ -92,6 +92,7 @@ module.exports = function(grunt) {
                 undef: true,
                 unused: true,
                 white: false,
+                newcap: true,
                 predef: [
                     "requirejs",
                     "require",
