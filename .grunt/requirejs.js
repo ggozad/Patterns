@@ -13,6 +13,7 @@ module.exports = {
     },
     standalone : {
         options : {
+            // XXX: do we need this or is it covered by almond:true?
             name : '../lib/almond',
             include : 'main',
             wrap : true,
