@@ -11,19 +11,97 @@ module.exports = function(grunt) {
         uglify : {
             build : {
                 files : {
-                    'bundles/patterns.<%= meta.fingerprint %>.min.js' : ['bundles/patterns.<%= meta.fingerprint %>.debug.js']
+                    'bundles/patterns.<%= meta.fingerprint %>.min.js' : [
+                        'bundles/patterns.<%= meta.fingerprint %>.debug.js'
+                    ]
+                },
+                options: {
+                    preserveComments: true,
+                    sourceMap: "bundles/patterns.<%= meta.fingerprint %>.min.map",
+                    sourceMapRoot: "http://patternslib.com"
                 }
             },
             standalone : {
                 files : {
-                    'bundles/patterns-standalone.<%= meta.fingerprint %>.min.js' : ['bundles/patterns-standalone.<%= meta.fingerprint %>.debug.js']
+                    'bundles/patterns-standalone.<%= meta.fingerprint %>.min.js' : [
+                        'bundles/patterns-standalone.<%= meta.fingerprint %>.debug.js'
+                    ]
+                },
+                options: {
+                    preserveComments: true,
+                    sourceMap: "bundles/patterns-standalone.<%= meta.fingerprint %>.min.map",
+                    sourceMapRoot: "http://patternslib.com"
                 }
             }
         },
         clean : {
             build : [
-                'bundles/patterns*.js'
+                'bundles/patterns*.js',
+                "bundles/patterns*.map"
+            ],
+            test: [
+                "_SpecRunner.html"
             ]
+        },
+        jasmine: {
+            src: [],
+            options: {
+                template: "tests/runner.tmpl",
+                vendor: [
+                    "lib/requireHelper.js"
+                ],
+                specs: [
+                    "tests/*.js"
+                ]
+            }
+        },
+        jshint: {
+            sources: [
+                "Gruntfile.js",
+                "src/*.js",
+                "src/core/.js",
+                "src/patterns/*.js"
+            ],
+            tests: {
+                src: ["tests/*.js"],
+                options: {
+                    jquery: true,
+                    predef: [
+                        "define",
+                        "module",
+                        "describe",
+                        "it",
+                        "expect",
+                        "spyOn",
+                        "beforeEach",
+                        "afterEach",
+                        "requireDependencies",
+                        "jasmine"
+                    ]
+                }
+            },
+            options: {
+                indent: 4,
+                eqeqeq: true,
+                browser: true,
+                devel: true,
+                jquery: false,
+                quotmark: "double",
+                smarttabs: true,
+                trailing: true,
+                undef: true,
+                unused: true,
+                white: false,
+                predef: [
+                    "requirejs",
+                    "require",
+                    "define",
+                    "module",
+                    "Markdown",
+                    "Modernizr",
+                    "tinyMCE"
+                ]
+            }
         },
         symlink : {
             bundles: {
@@ -116,11 +194,25 @@ module.exports = function(grunt) {
 
     grunt.loadNpmTasks('grunt-contrib-requirejs');
     grunt.loadNpmTasks('grunt-contrib-clean');
+    grunt.loadNpmTasks("grunt-contrib-jasmine");
+    grunt.loadNpmTasks("grunt-contrib-jshint");
     grunt.loadNpmTasks('grunt-contrib-uglify');
     grunt.loadNpmTasks('grunt-contrib-sass');
     grunt.loadNpmTasks('grunt-strip');
 
-    grunt.registerTask('default', ['git-rev', 'requirejs', 'strip', 'uglify', 'symlink', 'sass']);
+    // grunt.registerTask("test", ["jasmine", "jshint"]);
+    // grunt.registerTask("build", ["clean", "requirejs", "uglify"]);
+    grunt.registerTask('default', [
+        "jasmine",
+        "jshint",
+        //"clean",
+        'git-rev',
+        'requirejs',
+        'strip',
+        'uglify',
+        'symlink',
+        'sass'
+    ]);
 
 };
 
