@@ -85,7 +85,7 @@ module.exports = function(grunt) {
                 indent: 4,
                 eqeqeq: true,
                 browser: true,
-                devel: true,
+                devel: false,
                 jquery: false,
 
                 // If we enforce, I'd like to use single, as this
