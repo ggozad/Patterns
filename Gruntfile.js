@@ -150,20 +150,24 @@ module.exports = function(grunt) {
     });
 
     grunt.registerMultiTask('symlink', 'Create symlinks.', function() {
-        var fs = require('fs'),
-            dest = this.file.dest,
-            src = this.file.srcRaw[0];
-        try{
-            if (fs.existsSync(dest)) fs.unlinkSync(dest);
-            fs.symlinkSync(src, dest);
-            var rel = dest.substr(0, dest.lastIndexOf('/') + 1);
-            grunt.log.ok('created symlink at ' + dest +
-                         ' that points to ' + src +
-                         ' (relative to ' + rel +')'
-                        );
-        } catch(e){
-            if (e.code === 'EEXIST') grunt.log.error(dest + ' already exists, skipping');
-        }
+        this.files.forEach(function(f) {
+            var fs = require('fs'),
+                dest = f.dest,
+                src = f.src;
+            try {
+                if (fs.existsSync(dest)) {
+                    fs.unlinkSync(dest);
+                }
+                fs.symlinkSync(src, dest);
+                var rel = dest.substr(0, dest.lastIndexOf('/') + 1);
+                grunt.log.ok('created symlink at ' + dest +
+                             ' that points to ' + src +
+                             ' (relative to ' + rel +')'
+                            );
+            } catch(e) {
+                if (e.code === 'EEXIST') grunt.log.error(dest + ' already exists, skipping');
+            }
+        });
     });
 
     grunt.registerTask('git-rev',function(){
