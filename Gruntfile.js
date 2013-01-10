@@ -201,10 +201,7 @@ module.exports = function(grunt) {
     grunt.loadNpmTasks('grunt-strip');
 
     grunt.registerTask("test", ["jasmine", "jshint"]);
-    // grunt.registerTask("build", ["clean", "requirejs", "uglify"]);
-    grunt.registerTask('default', [
-        "test",
-        //"clean",
+    grunt.registerTask("build", [
         'git-rev',
         'requirejs',
         'strip',
@@ -212,6 +209,6 @@ module.exports = function(grunt) {
         'symlink',
         'sass'
     ]);
-
+    grunt.registerTask('default', ["test", "build"]);
 };
 
