@@ -115,16 +115,6 @@ module.exports = function(grunt) {
                 }
             }
         },
-        strip : {
-            'patterns' : {
-                src  : 'bundles/patterns.<%= meta.fingerprint %>.debug.js',
-                dest : 'bundles/patterns.<%= meta.fingerprint %>.js'
-            },
-            'patterns-standalone' : {
-                src  : 'bundles/patterns-standalone.<%= meta.fingerprint %>.debug.js',
-                dest : 'bundles/patterns-standalone.<%= meta.fingerprint %>.js'
-            }
-        }
         // sass : {
         //     options : {
         //         compass : true
@@ -198,13 +188,11 @@ module.exports = function(grunt) {
     grunt.loadNpmTasks("grunt-contrib-jshint");
     grunt.loadNpmTasks('grunt-contrib-uglify');
     //grunt.loadNpmTasks('grunt-contrib-sass');
-    grunt.loadNpmTasks('grunt-strip');
 
     grunt.registerTask("test", ["jasmine", "jshint"]);
     grunt.registerTask("build", [
         'git-rev',
         'requirejs',
-        'strip',
         'uglify',
         'symlink'
     ]);
