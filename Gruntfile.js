@@ -11,25 +11,25 @@ module.exports = function(grunt) {
         uglify : {
             build : {
                 files : {
-                    'bundles/patterns.<%= meta.fingerprint %>.min.js' : [
-                        'bundles/patterns.<%= meta.fingerprint %>.debug.js'
+                    'bundles/patterns-<%= meta.fingerprint %>.min.js' : [
+                        'bundles/patterns-<%= meta.fingerprint %>.js'
                     ]
                 },
                 options: {
                     preserveComments: true,
-                    sourceMap: "bundles/patterns.<%= meta.fingerprint %>.min.map",
+                    sourceMap: "bundles/patterns-<%= meta.fingerprint %>.min.map",
                     sourceMapRoot: "http://patternslib.com"
                 }
             },
             standalone : {
                 files : {
-                    'bundles/patterns-standalone.<%= meta.fingerprint %>.min.js' : [
-                        'bundles/patterns-standalone.<%= meta.fingerprint %>.debug.js'
+                    'bundles/patterns-standalone-<%= meta.fingerprint %>.min.js' : [
+                        'bundles/patterns-standalone-<%= meta.fingerprint %>.js'
                     ]
                 },
                 options: {
                     preserveComments: true,
-                    sourceMap: "bundles/patterns-standalone.<%= meta.fingerprint %>.min.map",
+                    sourceMap: "bundles/patterns-standalone-<%= meta.fingerprint %>.min.map",
                     sourceMapRoot: "http://patternslib.com"
                 }
             }
@@ -125,12 +125,10 @@ module.exports = function(grunt) {
         symlink : {
             bundles: {
                 files : {
-                    'bundles/patterns-standalone.js'       : 'patterns-standalone.<%= meta.fingerprint %>.js',
-                    'bundles/patterns-standalone.min.js'   : 'patterns-standalone.<%= meta.fingerprint %>.min.js',
-                    'bundles/patterns-standalone.debug.js' : 'patterns-standalone.<%= meta.fingerprint %>.debug.js',
-                    'bundles/patterns.js'                  : 'patterns.<%= meta.fingerprint %>.js',
-                    'bundles/patterns.min.js'              : 'patterns.<%= meta.fingerprint %>.min.js',
-                    'bundles/patterns.debug.js'            : 'patterns.<%= meta.fingerprint %>.debug.js'
+                    'bundles/patterns-standalone.js'       : 'patterns-standalone-<%= meta.fingerprint %>.js',
+                    'bundles/patterns-standalone.min.js'   : 'patterns-standalone-<%= meta.fingerprint %>.min.js',
+                    'bundles/patterns.js'                  : 'patterns-<%= meta.fingerprint %>.js',
+                    'bundles/patterns.min.js'              : 'patterns-<%= meta.fingerprint %>.min.js'
                 }
             }
         }
