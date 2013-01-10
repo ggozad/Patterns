@@ -114,7 +114,7 @@ module.exports = function(grunt) {
                     'bundles/patterns.debug.js'            : 'patterns.<%= meta.fingerprint %>.debug.js'
                 }
             }
-        },
+        }
         // sass : {
         //     options : {
         //         compass : true
