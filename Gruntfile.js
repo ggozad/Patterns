@@ -65,7 +65,7 @@ module.exports = function(grunt) {
   grunt.registerMultiTask('symlink', 'Create symlinks.', function() {
     var fs = require('fs'),
         dest = this.file.dest,
-        src = this.file.src[0];
+        src = this.file.srcRaw[0];
     try{
       if (fs.existsSync(dest)) fs.unlinkSync(dest);
       fs.symlinkSync(src, dest);
