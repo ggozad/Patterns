@@ -80,19 +80,37 @@ module.exports = function(grunt) {
                     ]
                 }
             },
+            // see: http://www.jshint.com/docs/
             options: {
                 indent: 4,
                 eqeqeq: true,
                 browser: true,
                 devel: true,
                 jquery: false,
-                quotmark: "double",
-                smarttabs: true,
+
+                // If we enforce, I'd like to use single, as this
+                // avoids quoting when inlining html or writing jquery
+                // selectors that use '"'
+                //quotmark: "single",
+
+                // Why should we mix tabs with spaces, this leads to
+                // problems if somebody decided that 4 spaces would be
+                // good for a tab. I'd like to avoid that discussion.
+                //smarttabs: true,
+
                 trailing: true,
                 undef: true,
                 unused: true,
                 white: false,
+
+                //curly: true,
+                immed: true,
+                latedef: true,
                 newcap: true,
+                noarg: true,
+                nonew: true,
+                //strict: true,
+
                 predef: [
                     "requirejs",
                     "require",
