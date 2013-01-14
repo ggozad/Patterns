@@ -5,5 +5,4 @@
 /bundles/patterns.min.map
 /src/lib/jquery.mutations/build
 /node_modules
-/_SpecRunner.html
 /.grunt/grunt-contrib-jasmine
