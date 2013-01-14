@@ -177,7 +177,11 @@ module.exports = function(grunt) {
                              ' (relative to ' + rel +')'
                             );
             } catch(e) {
-                if (e.code === 'EEXIST') grunt.log.error(dest + ' already exists, skipping');
+                if (e.code === 'EEXIST') {
+                    grunt.log.error(dest + ' already exists, skipping');
+                } else {
+                    grunt.log.error(e);
+                }
             }
         });
     });
