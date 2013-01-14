@@ -171,6 +171,8 @@ module.exports = function(grunt) {
                     fs.unlinkSync(dest);
                 } catch (e) {
                 }
+                // XXX: this will break if dest and src are not in the same dir
+                src = src.substr(dest.lastIndexOf('/') + 1);
                 fs.symlinkSync(src, dest);
                 var rel = dest.substr(0, dest.lastIndexOf('/') + 1);
                 grunt.log.ok('created symlink at ' + dest +
