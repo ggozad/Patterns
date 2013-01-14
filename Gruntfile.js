@@ -167,8 +167,9 @@ module.exports = function(grunt) {
             var dest = f.dest,
                 src = f.src[0];
             try {
-                if (fs.existsSync(dest)) {
+                try {
                     fs.unlinkSync(dest);
+                } catch (e) {
                 }
                 fs.symlinkSync(src, dest);
                 var rel = dest.substr(0, dest.lastIndexOf('/') + 1);
