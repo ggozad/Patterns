@@ -165,7 +165,7 @@ module.exports = function(grunt) {
         var fs = require('fs');
         this.files.forEach(function(f) {
             var dest = f.dest,
-                src = f.src;
+                src = f.src[0];
             try {
                 if (fs.existsSync(dest)) {
                     fs.unlinkSync(dest);
