@@ -76,4 +76,3 @@ The command `npm test` will alse create the files
 ``tests/TestRunner-bundle-min.html` which you can open in a browser to
 test the modularized, bundled and minified version of Patterns. The
 modularized version is linked to `tests/index.html`.
-
