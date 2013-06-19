@@ -1,6 +1,6 @@
 @charset "UTF-8";
 
-
+ 
 .icon-home:before { content: '\2302'; } /* '⌂' */
 .icon-right-dir:before { content: '\25b8'; } /* '▸' */
 .icon-down-dir:before { content: '\25be'; } /* '▾' */
@@ -15,6 +15,7 @@
 .icon-grid-large:before { content: '\e80b'; } /* '' */
 .icon-flag:before { content: '\2691'; } /* '⚑' */
 .icon-cog:before { content: '\e804'; } /* '' */
+.icon-attention:before { content: '\e80c'; } /* '' */
 .icon-cog-many:before { content: '\26ef'; } /* '⛯' */
 .icon-cut:before { content: '\2702'; } /* '✂' */
 .icon-mail:before { content: '\2709'; } /* '✉' */

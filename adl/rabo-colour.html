@@ -1,0 +1,22 @@
+<element name="rabo-colour" attributes="owner color optional">
+  <template>
+    <p>
+      This is <strong>{{owner}}</strong>'s Dialogue element. {{owner}} likes the color <strong style="color: {{color}}">{{color}}</strong>.
+    </p>
+
+	  <template bind if="{{ optional }}">
+	  	<p>
+        Yay! I'm shown under a condition.
+      </p>
+	  </template>
+  </template>
+  <script>
+    Polymer.register(this, {
+    	// These default values are overridden
+		// by the user's attribute values.
+      	owner: "John",
+      	color: "red",
+      	optional: false
+    });
+  </script>
+</element>
